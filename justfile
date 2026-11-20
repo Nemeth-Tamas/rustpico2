@@ -19,13 +19,14 @@ check:
     cargo check --release --offline
 
 # Build firmware and generate the UF2 image
-build:
-    cargo build --release --offline
+# Optionally enable a named Cargo feature.
+build features="":
+    cargo build --release --offline {{if features == "" {""} else {"--features " + features}}}
     rustc --edition=2024 -O .\tools\elf2uf2.rs -o .\tools\elf2uf2.exe
     .\tools\elf2uf2.exe .\target\thumbv8m.main-none-eabihf\release\rustpico2 .\rustpico2.uf2
 
 # Build and flash to a Pico 2 in BOOTSEL mode
-flash: build
+flash features="": (build features)
     $volumes = @(Get-Volume -FileSystemLabel 'RP2350' -ErrorAction SilentlyContinue | Where-Object { $_.DriveLetter }); if ($volumes.Count -ne 1) { throw "Expected exactly one RP2350 BOOTSEL drive; found $($volumes.Count). Hold BOOTSEL while connecting the Pico 2." }; $destination = ('{0}:\rustpico2.uf2' -f $volumes[0].DriveLetter); Copy-Item -LiteralPath '.\rustpico2.uf2' -Destination $destination -ErrorAction Stop; Write-Host "UF2 copied to $destination"
 
 # Remove generated files

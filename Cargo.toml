@@ -5,6 +5,11 @@ edition = "2024"
 
 [dependencies]
 
+[features]
+default = []
+fault-test-panic = []
+fault-test-usage = []
+
 [profile.dev]
 panic = "abort"
 

@@ -78,6 +78,15 @@ Available commands:
     just status
     just push "commit message"
 
+Fault-injection builds:
+
+    just flash fault-test-panic
+    just flash fault-test-usage
+
+Always restore normal firmware after fault testing:
+
+    just flash
+
 Firmware builds use Cargo offline mode.
 
 Host development tools may use external dependencies.
@@ -94,17 +103,38 @@ Target firmware remains no_std and dependency-free.
 - [x] Add solid-LED failure indicator.
 - [x] Assert vector table size and IMAGE_DEF offset.
 - [x] Assert word alignment of RAM initialization regions.
-- [ ] Build and test on physical Pico 2.
-- [ ] Confirm normal LED blink after RAM self-test.
-- [ ] Commit and push Milestone 2A.
+- [x] Build and test on physical Pico 2.
+- [x] Confirm normal LED blink after RAM self-test.
+- [x] Commit and push Milestone 2A.
+
+Hardware confirmation: November 20, 2026.
+RAM startup self-test passed and normal LED blinking confirmed.
 
 ### Milestone 2B — Fault Handling and Stack Safety
 
-- [ ] Add stack layout and guards.
-- [ ] Implement panic and fault diagnostics.
-- [ ] Verify complete vector table and memory map.
-- [ ] Investigate ARM Cortex-M33 fault status registers.
-- [ ] Provide distinguishable LED fault patterns.
+- [x] Reserve a 4 KiB main stack.
+- [x] Add linker assertion against stack overlap.
+- [x] Configure Cortex-M33 MSPLIM.
+- [x] Define dedicated system fault vectors.
+- [x] Enable configurable CPU fault exceptions.
+- [x] Implement panic and exception LED diagnostics.
+- [x] Add optional Rust panic fault injection.
+- [x] Add optional CPU UsageFault injection.
+- [x] Extend Just build and flash commands with features.
+- [ ] Compile and flash normal firmware.
+- [ ] Verify normal LED blink.
+- [ ] Verify intentional panic gives 2 flashes.
+- [ ] Verify intentional UsageFault gives 6 flashes.
+- [ ] Restore normal firmware and confirm blinking.
+- [ ] Commit and push Milestone 2B.
+
+### Milestone 2C — Advanced Fault Diagnostics
+
+- [ ] Capture CFSR and HFSR fault status registers.
+- [ ] Capture faulting PC and stacked CPU registers.
+- [ ] Add distinguishable fault subcodes.
+- [ ] Explore robust stack-overflow recovery.
+- [ ] Add panic and exception output over UART.
 
 ## Milestone 3 — UART
 

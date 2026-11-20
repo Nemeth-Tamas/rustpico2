@@ -29,6 +29,12 @@ const GPIO_FUNC_SIO: u32 = 5;
 // Pad isolation control.
 const PAD_ISO: u32 = 1 << 8;
 
+// Cortex-M33 System Handler Control and State Register.
+const SCB_SHCSR: usize = 0xE000_ED24;
+
+// Enable MemManage, BusFault, UsageFault and SecureFault.
+const FAULT_ENABLE_MASK: u32 = (1 << 16) | (1 << 17) | (1 << 18) | (1 << 19);
+
 // Real writable RAM variables used to verify startup initialization.
 // The nonzero initializer belongs in .data.
 // The zero initializer belongs in .bss.
@@ -37,6 +43,9 @@ const BOOT_BSS_MAGIC: u32 = 0xA55A_5AA5;
 
 static mut BOOT_DATA_MARKER: u32 = BOOT_DATA_MAGIC;
 static mut BOOT_BSS_MARKER: u32 = 0;
+
+#[cfg(all(feature = "fault-test-panic", feature = "fault-test-usage"))]
+compile_error!("Enable only one fault-test feature at a time.");
 
 // ARM Cortex-M33 startup and RP2350 image metadata.
 global_asm!(
@@ -52,8 +61,16 @@ __vector_table:
     .word __stack_top
     .word Reset_Handler
 
-    // Remaining Cortex-M exception vectors.
-    .rept 14
+    // ARMv8-M system exception vectors, slots 2 through 15.
+    .word Default_Handler     // 2: NMI
+    .word hardfault_handler   // 3: HardFault
+    .word memmanage_handler   // 4: MemManage
+    .word busfault_handler    // 5: BusFault
+    .word usagefault_handler  // 6: UsageFault
+    .word securefault_handler // 7: SecureFault
+
+    // Remaining system exceptions, slots 8 through 15.
+    .rept 8
         .word Default_Handler
     .endr
 
@@ -79,8 +96,9 @@ __vector_table:
     .thumb_func
 
 Reset_Handler:
-    // Disable stack-limit trapping before entering Rust.
-    movs r0, #0
+    // Protect the reserved 4 KiB Main Stack.
+    // Hardware faults when MSP descends below this limit.
+    ldr r0, =__stack_bottom
     msr MSPLIM, r0
 
     // Copy initialized .data from flash to RAM.
@@ -131,7 +149,7 @@ Reset_Handler:
     .thumb_func
 
 Default_Handler:
-    b Default_Handler
+    b unexpected_handler
 
     .size Default_Handler, .-Default_Handler
 "#
@@ -173,6 +191,13 @@ fn initialize_led() {
     }
 }
 
+fn enable_fault_handlers() {
+    unsafe {
+        let current = read_reg(SCB_SHCSR);
+        write_reg(SCB_SHCSR, current | FAULT_ENABLE_MASK);
+    }
+}
+
 fn ram_self_test() -> bool {
     unsafe {
         // Check that the initialized value was copied from flash.
@@ -201,9 +226,69 @@ fn delay() {
     }
 }
 
+// Fault code is communicated by counting LED flashes.
+// This is a best-effort diagnostic: GPIO and the stack
+// must still be usable for the pattern to appear.
+#[inline(never)]
+fn fault_signal(code: u32) -> ! {
+    initialize_led();
+
+    loop {
+        for _ in 0..code {
+            unsafe {
+                write_reg(SIO_GPIO_OUT_SET, LED_MASK);
+            }
+
+            delay();
+
+            unsafe {
+                write_reg(SIO_GPIO_OUT_CLR, LED_MASK);
+            }
+
+            delay();
+        }
+
+        // Long gap between fault-code groups.
+        for _ in 0..6 {
+            delay();
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn hardfault_handler() -> ! {
+    fault_signal(3)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn memmanage_handler() -> ! {
+    fault_signal(4)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn busfault_handler() -> ! {
+    fault_signal(5)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn usagefault_handler() -> ! {
+    fault_signal(6)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn securefault_handler() -> ! {
+    fault_signal(7)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn unexpected_handler() -> ! {
+    fault_signal(8)
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_main() -> ! {
     initialize_led();
+    enable_fault_handlers();
 
     if !ram_self_test() {
         // Solid LED indicates RAM initialization failure.
@@ -214,6 +299,19 @@ pub extern "C" fn rust_main() -> ! {
         loop {
             core::hint::spin_loop();
         }
+    }
+
+    // Optional deliberate crash tests.
+    // Normal firmware does not compile either block.
+
+    #[cfg(feature = "fault-test-panic")]
+    panic!("Intentional Rust panic: LED code 2");
+
+    #[cfg(feature = "fault-test-usage")]
+    unsafe {
+        // Undefined ARM instruction: triggers UsageFault
+        // when the configurable exception is enabled.
+        core::arch::asm!("udf #0", options(noreturn));
     }
 
     loop {
@@ -235,7 +333,5 @@ pub extern "C" fn rust_main() -> ! {
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    loop {
-        core::hint::spin_loop();
-    }
+    fault_signal(2)
 }

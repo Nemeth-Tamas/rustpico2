@@ -7,6 +7,7 @@ MEMORY
 }
 
 __stack_top = ORIGIN(RAM) + LENGTH(RAM);
+__stack_bottom = __stack_top - 4K;
 
 SECTIONS
 {
@@ -90,4 +91,9 @@ ASSERT(
     (__sbss % 4) == 0 &&
     (__ebss % 4) == 0,
     "RAM initialization regions must be word-aligned"
+);
+
+ASSERT(
+    __ebss <= __stack_bottom,
+    "Static RAM overlaps the reserved 4 KiB stack"
 );
