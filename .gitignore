@@ -1,0 +1,4 @@
+/target/
+/tools/elf2uf2.exe
+/tools/elf2uf2
+/*.uf2
