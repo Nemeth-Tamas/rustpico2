@@ -35,6 +35,21 @@ const SCB_SHCSR: usize = 0xE000_ED24;
 // Enable MemManage, BusFault, UsageFault and SecureFault.
 const FAULT_ENABLE_MASK: u32 = (1 << 16) | (1 << 17) | (1 << 18) | (1 << 19);
 
+// Cortex-M33 fault and exception status registers.
+const SCB_ICSR: usize = 0xE000_ED04;
+const SCB_CFSR: usize = 0xE000_ED28;
+const SCB_HFSR: usize = 0xE000_ED2C;
+const SCB_MMFAR: usize = 0xE000_ED34;
+const SCB_BFAR: usize = 0xE000_ED38;
+const SCB_SFSR: usize = 0xE000_EDE4;
+const SCB_SFAR: usize = 0xE000_EDE8;
+
+const FAULT_RECORD_MAGIC: u32 = 0xFA17_2350;
+const SRAM_START: usize = 0x2000_0000;
+const SRAM_END: usize = 0x2008_2000;
+const FLASH_START: u32 = 0x1000_0000;
+const FLASH_END: u32 = 0x1040_0000;
+
 // Real writable RAM variables used to verify startup initialization.
 // The nonzero initializer belongs in .data.
 // The zero initializer belongs in .bss.
@@ -43,6 +58,32 @@ const BOOT_BSS_MAGIC: u32 = 0xA55A_5AA5;
 
 static mut BOOT_DATA_MARKER: u32 = BOOT_DATA_MAGIC;
 static mut BOOT_BSS_MARKER: u32 = 0;
+
+// 20 words of crash diagnostics in SRAM.
+// Exported by name for future SWD debugging and UART reporting.
+//
+// [0]  magic, written last after a complete capture
+// [1]  exception type
+// [2]  EXC_RETURN
+// [3]  original exception stack pointer
+// [4]  ICSR
+// [5]  CFSR
+// [6]  HFSR
+// [7]  MMFAR
+// [8]  BFAR
+// [9]  SFSR
+// [10] SFAR
+// [11] validity flags
+// [12] R0
+// [13] R1
+// [14] R2
+// [15] R3
+// [16] R12
+// [17] stacked LR
+// [18] stacked PC
+// [19] stacked xPSR
+#[unsafe(no_mangle)]
+pub static mut FAULT_RECORD: [u32; 20] = [0; 20];
 
 #[cfg(all(feature = "fault-test-panic", feature = "fault-test-usage"))]
 compile_error!("Enable only one fault-test feature at a time.");
@@ -63,11 +104,11 @@ __vector_table:
 
     // ARMv8-M system exception vectors, slots 2 through 15.
     .word Default_Handler     // 2: NMI
-    .word hardfault_handler   // 3: HardFault
-    .word memmanage_handler   // 4: MemManage
-    .word busfault_handler    // 5: BusFault
-    .word usagefault_handler  // 6: UsageFault
-    .word securefault_handler // 7: SecureFault
+    .word HardFault_Entry     // 3: HardFault
+    .word MemManage_Entry     // 4: MemManage
+    .word BusFault_Entry      // 5: BusFault
+    .word UsageFault_Entry    // 6: UsageFault
+    .word SecureFault_Entry   // 7: SecureFault
 
     // Remaining system exceptions, slots 8 through 15.
     .rept 8
@@ -149,9 +190,52 @@ Reset_Handler:
     .thumb_func
 
 Default_Handler:
-    b unexpected_handler
+    movs r0, #8
+    b Fault_Entry
 
     .size Default_Handler, .-Default_Handler
+
+    // Create one tiny entry stub for each CPU fault.
+    // r0 carries the fault classification.
+    .macro FAULT_VENEER name, number
+        .section .text.\name, "ax", %progbits
+        .global \name
+        .type \name, %function
+        .thumb_func
+\name:
+        movs r0, #\number
+        b Fault_Entry
+        .size \name, .-\name
+    .endm
+
+    FAULT_VENEER HardFault_Entry, 3
+    FAULT_VENEER MemManage_Entry, 4
+    FAULT_VENEER BusFault_Entry, 5
+    FAULT_VENEER UsageFault_Entry, 6
+    FAULT_VENEER SecureFault_Entry, 7
+
+    // Shared fault entry.
+    // r0 = fault type
+    // r1 = original exception stack frame
+    // r2 = EXC_RETURN
+    .section .text.Fault_Entry, "ax", %progbits
+    .global Fault_Entry
+    .type Fault_Entry, %function
+    .thumb_func
+
+Fault_Entry:
+    mov r2, lr
+
+    // EXC_RETURN bit 2 selects MSP or PSP.
+    tst lr, #4
+    ite eq
+    mrseq r1, msp
+    mrsne r1, psp
+
+    // Tail-branch into our Rust fault recorder.
+    b fault_capture
+
+    .size Fault_Entry, .-Fault_Entry
 "#
 );
 
@@ -226,14 +310,124 @@ fn delay() {
     }
 }
 
-// Fault code is communicated by counting LED flashes.
-// This is a best-effort diagnostic: GPIO and the stack
-// must still be usable for the pattern to appear.
+// Write one word of the exported SRAM crash record.
+#[inline(always)]
+fn fault_record_write(index: usize, value: u32) {
+    unsafe {
+        let base = (&raw mut FAULT_RECORD).cast::<u32>();
+        write_volatile(base.add(index), value);
+    }
+}
+
+// Called directly from the assembly exception entry.
+// The stack-frame pointer was captured before Rust entry.
+#[unsafe(no_mangle)]
+pub extern "C" fn fault_capture(kind: u32, frame: *const u32, exc_return: u32) -> ! {
+    // Invalidate the previous record before updating it.
+    for index in 0..20 {
+        fault_record_write(index, 0);
+    }
+
+    // Snapshot the ARM System Control Block registers.
+    let (icsr, cfsr, hfsr, mmfar, bfar, sfsr, sfar) = unsafe {
+        (
+            read_reg(SCB_ICSR),
+            read_reg(SCB_CFSR),
+            read_reg(SCB_HFSR),
+            read_reg(SCB_MMFAR),
+            read_reg(SCB_BFAR),
+            read_reg(SCB_SFSR),
+            read_reg(SCB_SFAR),
+        )
+    };
+
+    fault_record_write(1, kind);
+    fault_record_write(2, exc_return);
+    fault_record_write(3, frame as usize as u32);
+    fault_record_write(4, icsr);
+    fault_record_write(5, cfsr);
+    fault_record_write(6, hfsr);
+    fault_record_write(7, mmfar);
+    fault_record_write(8, bfar);
+    fault_record_write(9, sfsr);
+    fault_record_write(10, sfar);
+
+    // Only decode a basic eight-word frame.
+    // Extended floating-point/security frames require
+    // additional handling in a future milestone.
+    let frame_address = frame as usize;
+
+    let basic_frame = (exc_return & (1 << 4)) != 0;
+
+    let inside_sram = frame_address >= SRAM_START && frame_address <= SRAM_END - 32;
+
+    let aligned = (frame_address & 3) == 0;
+
+    // Exception stacking failures can make the frame invalid.
+    const STACKING_FAILURE_MASK: u32 = (1 << 4) | (1 << 12);
+
+    let stacking_ok = (cfsr & STACKING_FAILURE_MASK) == 0;
+
+    let frame_valid = basic_frame && inside_sram && aligned && stacking_ok;
+
+    let mut flags = 0u32;
+    let mut fault_pc = 0u32;
+
+    if frame_valid {
+        flags |= 1;
+
+        // The basic ARM exception frame contains:
+        // R0, R1, R2, R3, R12, LR, PC, xPSR.
+        for index in 0..8 {
+            let value = unsafe { read_volatile(frame.add(index)) };
+
+            fault_record_write(12 + index, value);
+
+            if index == 6 {
+                fault_pc = value;
+            }
+        }
+    }
+
+    // Validity of fault address registers.
+    if (cfsr & (1 << 7)) != 0 {
+        flags |= 1 << 1; // MMFAR valid
+    }
+
+    if (cfsr & (1 << 15)) != 0 {
+        flags |= 1 << 2; // BFAR valid
+    }
+
+    if (sfsr & (1 << 6)) != 0 {
+        flags |= 1 << 3; // SFAR valid
+    }
+
+    fault_record_write(11, flags);
+
+    // Magic is the commit marker: write it last.
+    fault_record_write(0, FAULT_RECORD_MAGIC);
+
+    // Special confirmation for the deliberate UDF test:
+    // UsageFault + UNDEFINSTR + valid flash PC.
+    let verified_undefined_instruction = kind == 6
+        && (cfsr & (1 << 16)) != 0
+        && frame_valid
+        && (FLASH_START..FLASH_END).contains(&fault_pc);
+
+    let detail = u32::from(verified_undefined_instruction);
+
+    fault_signal(kind, detail)
+}
+
+// Primary fault code: regular LED pulses.
+// Optional detail: longer pulse after a separating gap.
+// This remains best-effort if the stack or GPIO is damaged.
 #[inline(never)]
-fn fault_signal(code: u32) -> ! {
+fn fault_signal(code: u32, detail: u32) -> ! {
     initialize_led();
 
     loop {
+        // Primary exception type.
         for _ in 0..code {
             unsafe {
                 write_reg(SIO_GPIO_OUT_SET, LED_MASK);
@@ -248,42 +442,39 @@ fn fault_signal(code: u32) -> ! {
             delay();
         }
 
-        // Long gap between fault-code groups.
+        if detail != 0 {
+            // Distinguish details from the main flash group.
+            for _ in 0..3 {
+                delay();
+            }
+
+            for _ in 0..detail {
+                unsafe {
+                    write_reg(SIO_GPIO_OUT_SET, LED_MASK);
+                }
+
+                // Longer flash indicates verified detail.
+                for _ in 0..3 {
+                    delay();
+                }
+
+                unsafe {
+                    write_reg(SIO_GPIO_OUT_CLR, LED_MASK);
+                }
+
+                delay();
+            }
+        }
+
+        // Long gap between repeating fault groups.
         for _ in 0..6 {
             delay();
         }
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn hardfault_handler() -> ! {
-    fault_signal(3)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn memmanage_handler() -> ! {
-    fault_signal(4)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn busfault_handler() -> ! {
-    fault_signal(5)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn usagefault_handler() -> ! {
-    fault_signal(6)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn securefault_handler() -> ! {
-    fault_signal(7)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn unexpected_handler() -> ! {
-    fault_signal(8)
-}
+// CPU exceptions now enter through assembly and fault_capture().
+// Ordinary Rust panics still use the separate panic handler below.
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_main() -> ! {
@@ -333,5 +524,7 @@ pub extern "C" fn rust_main() -> ! {
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    fault_signal(2)
+    // A Rust panic is not a hardware exception, so it has
+    // no automatically stacked CPU exception frame.
+    fault_signal(2, 0)
 }
