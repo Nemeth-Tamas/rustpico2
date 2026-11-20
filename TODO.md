@@ -343,14 +343,18 @@ The fault command on a fresh boot should report no record.
 - [x] Preserve UART polling during normal operation.
 - [x] Retain independent fault LED delay fallback.
 - [x] Add LED fault code 10 for timer initialization failure.
-- [ ] Verify compilation.
-- [ ] Verify TIMER0 initialization on physical hardware.
-- [ ] Verify accurate LED blinking.
-- [ ] Verify uptime increases correctly.
-- [ ] Verify status displays hardware uptime.
-- [ ] Verify UART commands remain responsive.
-- [ ] Verify fault reporting still works.
-- [ ] Commit and push Milestone 3C.1.
+- [x] Verify compilation.
+- [x] Verify TIMER0 initialization on physical hardware.
+- [ ] Verify accurate LED blinking against an external clock.
+- [x] Verify uptime increases correctly.
+- [x] Verify status displays hardware uptime.
+- [x] Verify UART commands remain responsive.
+- [ ] Retest deliberate UsageFault with TIMER0 enabled.
+- [x] Commit and push Milestone 3C.1.
+
+Hardware confirmation: November 20, 2026.
+The Pico successfully reported hardware uptime, blink cycles,
+and responded to UART commands using the TIMER0 timebase.
 
 Hardware timer configuration:
   TIMER0 base: 0x400B0000
@@ -371,24 +375,74 @@ Interrupt-driven scheduling is a future milestone.
 - [ ] Add numerical argument parsing.
 - [ ] Implement interrupt-driven UART RX.
 - [ ] Add RX ring buffer and overrun statistics.
-- [ ] Add hardware timer-based uptime.
+- [x] Add hardware timer-based uptime.
 - [ ] Add command history and basic editing.
 - [ ] Add a controlled software reboot command.
 - [ ] Add faulting PC to source-line lookup.
 
 ## Milestone 4 — Hardware Time
 
+### Milestone 4A — Microsecond Timebase
+
 - [x] Implement TIMER0 microsecond timebase.
 - [x] Implement 64-bit uptime counter.
 - [x] Implement hardware-timed LED scheduling.
 - [x] Implement hardware-timed heartbeat scheduling.
-- [ ] Verify actual timing on physical hardware.
-- [ ] Implement TIMER0 alarm interrupts.
-- [ ] Configure NVIC for timer interrupts.
-- [ ] Implement interrupt-driven scheduling.
-- [ ] Add low-power WFI idle support.
+- [x] Verify uptime and status on physical hardware.
+- [ ] Measure LED timing against an external clock.
+
+### Milestone 4B — Interrupts and CPU Sleep
+
+- [x] Identify TIMER0_IRQ_0 as external IRQ 0.
+- [x] Install TIMER0 handler in vector table slot 16.
+- [x] Configure NVIC interrupt enable and pending registers.
+- [x] Configure TIMER0 alarm 0.
+- [x] Implement interrupt acknowledge and alarm rearming.
+- [x] Create atomic interrupt counter.
+- [x] Implement approximately 1 ms periodic wake-up.
+- [x] Verify first interrupt during initialization.
+- [x] Add initialization failure LED code 11.
+- [x] Clear Cortex-M33 SLEEPDEEP before ordinary WFI.
+- [x] Replace normal main-loop busy-spin with WFI.
+- [x] Add irq console command.
+- [x] Add interrupt statistics to status.
+- [ ] Compile and flash normal firmware.
+- [ ] Verify interrupt counter increases.
+- [ ] Verify IRQ count tracks elapsed milliseconds.
+- [ ] Verify UART input works during WFI operation.
+- [ ] Verify LED and heartbeat still work.
+- [ ] Verify panic and UsageFault reporting still work.
+- [ ] Commit and push Milestone 4B.
+
+Implementation notes:
+  TIMER0 base: 0x400B0000
+  Alarm 0:     TIMER0 + 0x10
+  INTR:        TIMER0 + 0x3C
+  INTE:        TIMER0 + 0x40
+  INTS:        TIMER0 + 0x48
+
+  TIMER0_IRQ_0 = external interrupt 0
+  Vector table slot = 16
+  NVIC ISER0 = 0xE000E100
+  Wake interval = approximately 1000 microseconds
+
+The alarm is one-shot and is rearmed by its ISR.
+The interrupt counter uses AtomicU32.
+The main loop processes UART commands after waking.
+
+WFI provides ordinary CPU sleep, not deep sleep.
+UART reception is still polled after each timer wake.
+Interrupt-driven UART RX is a future milestone.
+
+### Future Hardware Scheduling
+
+- [ ] Implement UART RX interrupts and a ring buffer.
+- [ ] Implement dynamically scheduled timer alarms.
+- [ ] Wake only when the next task is actually due.
 - [ ] Implement timer-driven software tasks.
-- [ ] Investigate repeating and one-shot timers.
+- [ ] Investigate interrupt priorities and nesting.
+- [ ] Explore cooperative task scheduling.
+- [ ] Measure current consumption during CPU sleep.
 
 ## Milestone 5 — Peripherals
 

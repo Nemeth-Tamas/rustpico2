@@ -120,7 +120,11 @@ __vector_table:
     .endr
 
     // RP2350 external interrupt vectors.
-    .rept 52
+    // External IRQ 0 = TIMER0_IRQ_0, vector table slot 16.
+    .word timer0_irq0_handler
+
+    // Remaining external interrupts, IRQ 1 through IRQ 51.
+    .rept 51
         .word Default_Handler
     .endr
 
@@ -514,6 +518,15 @@ pub extern "C" fn rust_main() -> ! {
         fault_signal(10, 0);
     }
 
+    // Install TIMER0 alarm 0 as a periodic interrupt source.
+    // Verify that a real interrupt is received before using WFI.
+    if !timer::start_alarm0_irq() {
+        uart::write_str("ERROR: TIMER0 IRQ0 did not fire\r\n");
+
+        // Eleven LED flashes indicate interrupt setup failure.
+        fault_signal(11, 0);
+    }
+
     uart::write_str("\r\n");
     uart::write_str("================================\r\n");
     uart::write_str(" RUSTPICO2 - BARE METAL RP2350\r\n");
@@ -522,6 +535,8 @@ pub extern "C" fn rust_main() -> ! {
     uart::write_str("Runtime: custom no_std Rust\r\n");
     uart::write_str("Clock: XOSC 12 MHz -> CLK_PERI + CLK_REF\r\n");
     uart::write_str("Timer: TIMER0, 1 MHz hardware timebase\r\n");
+    uart::write_str("IRQ: TIMER0_ALARM0 every ~1 ms\r\n");
+    uart::write_str("CPU idle: WFI enabled\r\n");
     uart::write_str("UART0: 115200 8N1\r\n");
     uart::write_str("UART0 TX: GPIO0\r\n");
     uart::write_str("UART0 RX: GPIO1\r\n");
@@ -588,7 +603,13 @@ pub extern "C" fn rust_main() -> ! {
             shell.heartbeat();
         }
 
-        core::hint::spin_loop();
+        // Sleep until the next interrupt.
+        // TIMER0 alarm 0 wakes us approximately every 1 ms.
+        // The UART FIFO holds incoming characters until
+        // the next wake-up and console poll.
+        unsafe {
+            core::arch::asm!("wfi", options(nomem, nostack, preserves_flags));
+        }
     }
 }
 

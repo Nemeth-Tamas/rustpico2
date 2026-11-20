@@ -7,6 +7,7 @@
 
 use core::hint::spin_loop;
 use core::ptr::{read_volatile, write_volatile};
+use core::sync::atomic::{AtomicU32, Ordering};
 
 // RP2350 clock reference registers.
 const CLK_REF_CTRL: usize = 0x4001_0030;
@@ -44,6 +45,27 @@ const CLK_DIV_ONE: u32 = 1 << 16;
 
 // Pico 2 has a 12 MHz crystal.
 const XOSC_CYCLES_PER_US: u32 = 12;
+
+// TIMER0 alarm 0 and interrupt registers.
+const TIMER0_ALARM0: usize = TIMER0_BASE + 0x10;
+const TIMER0_INTR: usize = TIMER0_BASE + 0x3C;
+const TIMER0_INTE: usize = TIMER0_BASE + 0x40;
+const TIMER0_INTS: usize = TIMER0_BASE + 0x48;
+
+// Cortex-M33 NVIC: external IRQ 0 = TIMER0_IRQ_0.
+const NVIC_ISER0: usize = 0xE000_E100;
+const NVIC_ICER0: usize = 0xE000_E180;
+const NVIC_ICPR0: usize = 0xE000_E280;
+
+// Cortex-M33 System Control Register.
+const SCB_SCR: usize = 0xE000_ED10;
+const SCB_SLEEPDEEP: u32 = 1 << 2;
+
+const ALARM0_BIT: u32 = 1;
+const ALARM_INTERVAL_US: u32 = 1_000;
+
+// Updated only by the hardware interrupt handler.
+static ALARM0_COUNT: AtomicU32 = AtomicU32::new(0);
 
 #[inline(always)]
 fn read32(address: usize) -> u32 {
@@ -146,4 +168,94 @@ pub fn millis() -> u64 {
 #[inline(always)]
 pub fn seconds() -> u64 {
     micros() / 1_000_000
+}
+
+/// Number of hardware alarm interrupts observed.
+///
+/// This is a wrapping 32-bit counter. At approximately
+/// 1000 interrupts per second it wraps after ~49.7 days.
+pub fn irq_count() -> u32 {
+    ALARM0_COUNT.load(Ordering::Relaxed)
+}
+
+/// Configure TIMER0 alarm 0 to interrupt roughly every 1 ms.
+///
+/// The first interrupt must arrive within 50 ms or the
+/// initialization is considered unsuccessful.
+pub fn start_alarm0_irq() -> bool {
+    ALARM0_COUNT.store(0, Ordering::Relaxed);
+
+    // Disable IRQ0 while preparing its hardware source.
+    write32(NVIC_ICER0, ALARM0_BIT);
+
+    // Disable only TIMER0 alarm 0, preserving other alarms.
+    let enabled = read32(TIMER0_INTE);
+    write32(TIMER0_INTE, enabled & !ALARM0_BIT);
+
+    // Clear any previously latched alarm interrupt.
+    write32(TIMER0_INTR, ALARM0_BIT);
+
+    // Remove any pending NVIC IRQ0 request.
+    write32(NVIC_ICPR0, ALARM0_BIT);
+
+    // Ensure WFI uses ordinary sleep rather than deep sleep.
+    let sleep_control = read32(SCB_SCR);
+    write32(SCB_SCR, sleep_control & !SCB_SLEEPDEEP);
+
+    // Program the first one-shot alarm 1 ms into the future.
+    let first_deadline = read32(TIMER0_TIMELR).wrapping_add(ALARM_INTERVAL_US);
+
+    write32(TIMER0_ALARM0, first_deadline);
+
+    // Enable alarm 0 at the TIMER0 peripheral.
+    write32(TIMER0_INTE, enabled | ALARM0_BIT);
+
+    // Enable external interrupt 0 in the NVIC.
+    write32(NVIC_ISER0, ALARM0_BIT);
+
+    // Explicitly enable normal maskable interrupts.
+    unsafe {
+        core::arch::asm!("cpsie i", options(nomem, nostack, preserves_flags));
+    }
+
+    // Verify the actual exception handler executes.
+    let start = micros();
+
+    while micros().wrapping_sub(start) < 50_000 {
+        if irq_count() != 0 {
+            return true;
+        }
+
+        spin_loop();
+    }
+
+    // If no interrupt arrived, disable the source.
+    write32(NVIC_ICER0, ALARM0_BIT);
+    write32(TIMER0_INTE, enabled & !ALARM0_BIT);
+
+    false
+}
+
+/// Actual Cortex-M33 interrupt service routine.
+///
+/// Called by vector table entry 16 (external IRQ 0).
+/// Keep this handler short: no serial printing, no
+/// allocation, no waiting for locks or other events.
+#[unsafe(no_mangle)]
+pub extern "C" fn timer0_irq0_handler() {
+    if (read32(TIMER0_INTS) & ALARM0_BIT) == 0 {
+        return;
+    }
+
+    // Clear the latched interrupt (write-one-to-clear).
+    write32(TIMER0_INTR, ALARM0_BIT);
+
+    // Alarm 0 is one-shot. Rearm it from the current
+    // hardware time for approximately 1 ms later.
+    let next_deadline = read32(TIMER0_TIMELR).wrapping_add(ALARM_INTERVAL_US);
+
+    write32(TIMER0_ALARM0, next_deadline);
+
+    // Record a successful interrupt.
+    ALARM0_COUNT.fetch_add(1, Ordering::Relaxed);
 }

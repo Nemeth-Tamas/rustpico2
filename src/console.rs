@@ -124,12 +124,22 @@ fn execute_command(command: &str, blink_cycles: u32) {
             uart::write_str("  ping       Test UART communication\r\n");
             uart::write_str("  status     Show firmware status\r\n");
             uart::write_str("  uptime     Show hardware uptime\r\n");
+            uart::write_str("  irq        Show TIMER0 interrupt count\r\n");
             uart::write_str("  fault      Show SRAM crash record\r\n");
             uart::write_str("  echo TEXT  Echo text back\r\n");
             uart::write_str("  crash udf  Deliberate UsageFault!\r\n");
         }
         "ping" => {
             uart::write_str("PONG from RP2350!\r\n");
+        }
+        "irq" => {
+            uart::write_str("TIMER0_IRQ_0 count: ");
+            uart::write_u64_decimal(u64::from(crate::timer::irq_count()));
+            uart::write_str("\r\n");
+
+            uart::write_str("Elapsed timer time (ms): ");
+            uart::write_u64_decimal(crate::timer::millis());
+            uart::write_str("\r\n");
         }
         "uptime" => {
             uart::write_str("Uptime: ");
@@ -155,9 +165,15 @@ fn execute_command(command: &str, blink_cycles: u32) {
             uart::write_str("\r\n");
 
             uart::write_str("  TIMER0: 1 MHz, 64-bit\r\n");
+            uart::write_str("  TIMER0 IRQ0: ENABLED\r\n");
+            uart::write_str("  CPU idle: WFI\r\n");
 
             uart::write_str("  Uptime (ms): ");
             uart::write_u64_decimal(crate::timer::millis());
+            uart::write_str("\r\n");
+
+            uart::write_str("  Timer interrupts: ");
+            uart::write_u64_decimal(u64::from(crate::timer::irq_count()));
             uart::write_str("\r\n");
         }
         "fault" => {
