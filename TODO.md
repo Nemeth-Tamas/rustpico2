@@ -10,6 +10,7 @@ Firmware: Rust no_std, no HAL, no SDK
 - GitHub master is the source of truth.
 - Full-file replacements for every code change.
 - No third-party firmware dependencies.
+- Host development dependencies are allowed.
 - No vendor SDK, HAL, Embassy, or Zephyr.
 - Build in small milestones.
 - Every milestone is committed and pushed,
@@ -30,11 +31,53 @@ Firmware: Rust no_std, no HAL, no SDK
 - [x] Configure GPIO25.
 - [x] Implement onboard LED blink loop.
 - [x] Create standalone Rust ELF-to-UF2 converter.
-- [ ] Compile firmware on development PC.
-- [ ] Generate UF2.
-- [ ] Flash Pico 2.
-- [ ] Confirm LED blinks.
-- [ ] Commit and push tested results.
+- [x] Compile firmware on development PC.
+- [x] Generate UF2.
+- [x] Flash Pico 2.
+- [x] Confirm LED blinks.
+- [x] Push initial working firmware to GitHub.
+
+Hardware confirmation: November 20, 2026.
+First bare-metal RP2350 firmware successfully executed.
+
+## Milestone 1.1 — Development Automation
+
+- [x] Choose Just task runner.
+- [x] Add Windows PowerShell recipes.
+- [x] Automate Cargo firmware builds.
+- [x] Automate Rust UF2 converter compilation.
+- [x] Automate ELF-to-UF2 conversion.
+- [x] Add automatic RP2350 BOOTSEL drive detection.
+- [x] Add automated UF2 copying.
+- [x] Add formatting and check commands.
+- [x] Add cleanup command.
+- [x] Add Git commit/push command.
+- [x] Correct Cargo release profile typo.
+- [ ] Verify Just recipes on Windows.
+- [ ] Test automatic flashing.
+- [ ] Commit and push Milestone 1.1.
+
+## Development Commands
+
+Install task runner:
+
+    scoop install just
+
+Available commands:
+
+    just
+    just fmt
+    just check
+    just build
+    just flash
+    just clean
+    just status
+    just push "commit message"
+
+Firmware builds use Cargo offline mode.
+
+Host development tools may use external dependencies.
+Target firmware remains no_std and dependency-free.
 
 ## Milestone 2 — Startup Improvements
 
