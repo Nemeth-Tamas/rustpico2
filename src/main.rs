@@ -5,6 +5,7 @@ use core::arch::global_asm;
 use core::panic::PanicInfo;
 use core::ptr::{read_volatile, write_volatile};
 
+mod console;
 mod uart;
 
 // RP2350 peripheral addresses.
@@ -312,6 +313,19 @@ fn delay() {
     }
 }
 
+// Normal-operation delay with regular UART input servicing.
+// Approximately the same spin-loop count as delay(), but
+// split into smaller pieces for interactive responsiveness.
+fn delay_with_console(shell: &mut console::Console) {
+    for _ in 0..200 {
+        shell.poll();
+
+        for _ in 0..5_000 {
+            core::hint::spin_loop();
+        }
+    }
+}
+
 // Write one word of the exported SRAM crash record.
 #[inline(always)]
 fn fault_record_write(index: usize, value: u32) {
@@ -418,6 +432,10 @@ pub extern "C" fn fault_capture(kind: u32, frame: *const u32, exc_return: u32) -
 
     let detail = u32::from(verified_undefined_instruction);
 
+    // Report the fault over UART before entering the LED loop.
+    // The bounded UART transmitter avoids indefinite FIFO waits.
+    console::print_fault_record();
+
     fault_signal(kind, detail)
 }
 
@@ -507,10 +525,16 @@ pub extern "C" fn rust_main() -> ! {
     uart::write_str("CPU: ARM Cortex-M33\r\n");
     uart::write_str("Runtime: custom no_std Rust\r\n");
     uart::write_str("Clock: XOSC 12 MHz -> CLK_PERI\r\n");
-    uart::write_str("UART0: 115200 8N1, GPIO0 TX\r\n");
+    uart::write_str("UART0: 115200 8N1\r\n");
+    uart::write_str("UART0 TX: GPIO0\r\n");
+    uart::write_str("UART0 RX: GPIO1\r\n");
     uart::write_str("RAM initialization: PASS\r\n");
     uart::write_str("Fault handlers: ENABLED\r\n");
     uart::write_str("Status: BOOT OK\r\n\r\n");
+
+    let mut shell = console::Console::new();
+    uart::write_str("Interactive console ready. Type help.\r\n");
+    shell.prompt();
 
     // Optional deliberate crash tests.
     // Normal firmware does not compile either block.
@@ -533,28 +557,33 @@ pub extern "C" fn rust_main() -> ! {
             write_reg(SIO_GPIO_OUT_SET, LED_MASK);
         }
 
-        delay();
+        delay_with_console(&mut shell);
 
         // LED off.
         unsafe {
             write_reg(SIO_GPIO_OUT_CLR, LED_MASK);
         }
 
-        delay();
+        delay_with_console(&mut shell);
 
         blink_cycles = blink_cycles.wrapping_add(1);
+        shell.set_blink_cycles(blink_cycles);
 
         // Send a heartbeat once every eight LED cycles.
         // This lets a serial terminal connect after boot.
         if (blink_cycles & 7) == 0 {
-            uart::write_str("RUSTPICO2: alive\r\n");
+            shell.heartbeat();
         }
     }
 }
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    // A Rust panic is not a hardware exception, so it has
-    // no automatically stacked CPU exception frame.
+    // A Rust panic does not create a CPU exception frame.
+    // It therefore has no hardware fault PC record here.
+    uart::write_str("\r\n*** RUST PANIC ***\r\n");
+    uart::write_str("No hardware exception frame available.\r\n");
+    uart::write_str("Entering LED panic pattern: 2 flashes.\r\n");
+
     fault_signal(2, 0)
 }

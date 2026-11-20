@@ -1,6 +1,7 @@
-//! Bare-metal RP2350 UART0 transmitter.
+//! Bare-metal RP2350 UART0 transmitter and receiver.
 //!
 //! GPIO0 (physical pin 1): UART0 TX
+//! GPIO1 (physical pin 2): UART0 RX
 //! Clock: Pico 2 XOSC, 12 MHz
 //! Baud: 115200, 8N1
 //!
@@ -26,13 +27,16 @@ const RESETS_DONE: usize = 0x4002_0008;
 // UART0 reset bit.
 const RESET_UART0: u32 = 1 << 26;
 
-// GPIO0 pad and function registers.
+// GPIO0 TX and GPIO1 RX control registers.
 const GPIO0_CTRL: usize = 0x4002_8004;
+const GPIO1_CTRL: usize = 0x4002_800C;
 const GPIO0_PAD: usize = 0x4003_8004;
+const GPIO1_PAD: usize = 0x4003_8008;
 
 const GPIO_FUNC_UART: u32 = 2;
 const PAD_ISO: u32 = 1 << 8;
 const PAD_OD: u32 = 1 << 7;
+const PAD_IE: u32 = 1 << 6;
 const PAD_PUE: u32 = 1 << 3;
 const PAD_PDE: u32 = 1 << 2;
 
@@ -40,6 +44,7 @@ const PAD_PDE: u32 = 1 << 2;
 const UART0_BASE: usize = 0x4007_0000;
 
 const UART_DR: usize = UART0_BASE;
+const UART_RSR_ECR: usize = UART0_BASE + 0x004;
 const UART_FR: usize = UART0_BASE + 0x018;
 const UART_IBRD: usize = UART0_BASE + 0x024;
 const UART_FBRD: usize = UART0_BASE + 0x028;
@@ -48,8 +53,12 @@ const UART_CR: usize = UART0_BASE + 0x030;
 const UART_ICR: usize = UART0_BASE + 0x044;
 
 const UART_FR_TXFF: u32 = 1 << 5;
+const UART_FR_RXFE: u32 = 1 << 4;
+const UART_DR_ERROR_MASK: u32 = 0xF << 8;
+
 const UART_CR_UARTEN: u32 = 1 << 0;
 const UART_CR_TXE: u32 = 1 << 8;
+const UART_CR_RXE: u32 = 1 << 9;
 
 const XOSC_STABLE: u32 = 1 << 31;
 const CLK_ENABLED: u32 = 1 << 28;
@@ -167,8 +176,20 @@ pub fn init() -> bool {
     // Connect GPIO0 to UART0 TX.
     write32(GPIO0_CTRL, GPIO_FUNC_UART);
 
-    // Enable UART and its transmitter, leaving RX disabled.
-    write32(UART_CR, UART_CR_UARTEN | UART_CR_TXE);
+    // Prepare GPIO1 as a UART receive input.
+    // Enable the input buffer and hold the idle line HIGH
+    // with a weak pull-up when the adapter is disconnected.
+    let rx_pad = read32(GPIO1_PAD);
+    write32(
+        GPIO1_PAD,
+        (rx_pad & !(PAD_ISO | PAD_OD | PAD_PDE)) | PAD_IE | PAD_PUE,
+    );
+
+    // Connect GPIO1 to UART0 RX.
+    write32(GPIO1_CTRL, GPIO_FUNC_UART);
+
+    // Enable UART0, TX and RX.
+    write32(UART_CR, UART_CR_UARTEN | UART_CR_TXE | UART_CR_RXE);
 
     UART_READY.store(true, Ordering::Release);
     true
@@ -201,6 +222,51 @@ fn write_byte(byte: u8) -> bool {
 pub fn write_str(message: &str) {
     for &byte in message.as_bytes() {
         if !write_byte(byte) {
+            return;
+        }
+    }
+}
+
+/// Read one UART0 byte without blocking.
+///
+/// Returns None if no byte is ready or the received
+/// character has a UART framing, parity, break or
+/// overrun error.
+pub fn read_byte() -> Option<u8> {
+    if !is_ready() {
+        return None;
+    }
+
+    if (read32(UART_FR) & UART_FR_RXFE) != 0 {
+        return None;
+    }
+
+    let data = read32(UART_DR);
+
+    if (data & UART_DR_ERROR_MASK) != 0 {
+        // Clear the receive error flags.
+        write32(UART_RSR_ECR, 0xF);
+        return None;
+    }
+
+    Some((data & 0xFF) as u8)
+}
+
+/// Write a 32-bit integer as eight uppercase hex digits.
+/// Example: 0xFA172350
+pub fn write_hex32(value: u32) {
+    write_str("0x");
+
+    for nibble in (0..8).rev() {
+        let digit = ((value >> (nibble * 4)) & 0xF) as u8;
+
+        let character = if digit < 10 {
+            b'0' + digit
+        } else {
+            b'A' + digit - 10
+        };
+
+        if !write_byte(character) {
             return;
         }
     }

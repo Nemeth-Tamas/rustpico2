@@ -201,9 +201,10 @@ A verified undefined-instruction UsageFault produces
 
 #### Milestone 2C.2 — Fault Reporting
 
-- [ ] Add fault-register decoding helpers.
-- [ ] Add a way to retrieve recorded fault data.
-- [ ] Print exception diagnostics over UART.
+- [x] Implement initial fault-register decoding helpers.
+- [x] Implement the fault command for SRAM record inspection.
+- [x] Implement automatic UART exception diagnostics.
+- [ ] Verify printed fault report on physical hardware.
 - [ ] Investigate persistent crash records.
 - [ ] Explore robust stack-overflow recovery.
 - [ ] Support extended exception frames.
@@ -227,12 +228,16 @@ A verified undefined-instruction UsageFault produces
 - [x] Add UART initialization failure LED code 9.
 - [x] Add Just serial port discovery.
 - [x] Add Just serial monitor recipe.
-- [ ] Compile normal firmware.
-- [ ] Flash and confirm LED blinking.
-- [ ] Verify UART0 output with serial adapter.
-- [ ] Confirm startup banner.
-- [ ] Confirm periodic heartbeat.
-- [ ] Commit and push Milestone 3A.
+- [x] Compile normal firmware.
+- [x] Flash and confirm LED blinking.
+- [x] Verify UART0 output with serial adapter.
+- [x] Confirm startup banner.
+- [x] Confirm periodic heartbeat.
+- [x] Commit and push Milestone 3A.
+
+Hardware confirmation: November 20, 2026.
+UART0 transmitter successfully outputs the startup banner
+and periodic heartbeat messages at 115200 baud.
 
 Hardware:
   Pico 2 GPIO0, physical pin 1 -> USB-TTL RX
@@ -260,14 +265,69 @@ The existing CPU clock is not reconfigured.
 
 ### Milestone 3B — UART Receiver and Console
 
-- [ ] Configure GPIO1 for UART0 RX.
-- [ ] Implement nonblocking UART receive.
-- [ ] Implement line buffering.
-- [ ] Implement a tiny command parser.
-- [ ] Add help and status commands.
-- [ ] Add memory and register inspection commands.
-- [ ] Add crash record reporting.
-- [ ] Integrate UART diagnostics with panic handling.
+- [x] Configure GPIO1 for UART0 RX.
+- [x] Enable GPIO1 input buffer and idle pull-up.
+- [x] Enable UART0 receiver.
+- [x] Implement nonblocking UART receive.
+- [x] Detect and discard UART receive errors.
+- [x] Implement fixed 64-byte ASCII line buffer.
+- [x] Handle Enter, Backspace and CRLF.
+- [x] Implement tiny command parser.
+- [x] Add help, ping, status and echo commands.
+- [x] Add fault record reporting command.
+- [x] Add deliberate crash udf command.
+- [x] Implement hexadecimal register output.
+- [x] Add UART diagnostics to CPU fault handling.
+- [x] Add UART message to Rust panic handling.
+- [x] Preserve LED blinking while polling RX.
+- [x] Prevent heartbeat messages while typing.
+- [x] Create bidirectional PowerShell serial monitor.
+- [x] Integrate serial monitor with Just.
+- [ ] Build and flash normal firmware.
+- [ ] Verify normal LED blinking.
+- [ ] Verify interactive shell prompt.
+- [ ] Test help, ping, status and echo.
+- [ ] Verify fault command reports no previous crash.
+- [ ] Trigger crash udf and inspect UART fault report.
+- [ ] Verify six-short/one-long LED pattern.
+- [ ] Restore normal firmware.
+- [ ] Commit and push Milestone 3B.
+
+Hardware:
+  GPIO0 (physical pin 1) -> USB-TTL RX
+  GPIO1 (physical pin 2) -> USB-TTL TX
+  GND   (physical pin 3) -> USB-TTL GND
+
+USB-TTL logic must be 3.3 V.
+Do not connect the USB-TTL VCC pin.
+Power the Pico 2 through its own USB connector.
+
+Interactive commands:
+  help
+  ping
+  status
+  fault
+  echo TEXT
+  crash udf
+
+The crash udf command intentionally causes a UsageFault.
+The fault handler prints the SRAM crash record over UART,
+then enters its repeating LED fault pattern.
+
+The SRAM crash record is not persistent across resets.
+The fault command on a fresh boot should report no record.
+
+### Milestone 3C — Advanced Console
+
+- [ ] Add arbitrary safe register inspection commands.
+- [ ] Add memory map and RAM usage reporting.
+- [ ] Add numerical argument parsing.
+- [ ] Implement interrupt-driven UART RX.
+- [ ] Add RX ring buffer and overrun statistics.
+- [ ] Add hardware timer-based uptime.
+- [ ] Add command history and basic editing.
+- [ ] Add a controlled software reboot command.
+- [ ] Add faulting PC to source-line lookup.
 
 ## Milestone 4 — Hardware Time
 

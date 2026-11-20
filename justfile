@@ -39,9 +39,9 @@ clean:
 ports:
     [System.IO.Ports.SerialPort]::GetPortNames() | Sort-Object
 
-# Monitor a serial port at 115200 baud (Ctrl+C to stop)
+# Interactive bidirectional serial console (Ctrl+C to stop)
 monitor port:
-    $serial = [System.IO.Ports.SerialPort]::new('{{port}}', 115200, [System.IO.Ports.Parity]::None, 8, [System.IO.Ports.StopBits]::One); $serial.Open(); try { while ($true) { $chunk = $serial.ReadExisting(); if ($chunk.Length -gt 0) { [Console]::Write($chunk) }; Start-Sleep -Milliseconds 20 } } finally { $serial.Close() }
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\serial_monitor.ps1 "{{port}}"
 
 # Show current Git state
 status:
