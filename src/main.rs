@@ -6,6 +6,7 @@ use core::panic::PanicInfo;
 use core::ptr::{read_volatile, write_volatile};
 
 mod console;
+mod timer;
 mod uart;
 
 // RP2350 peripheral addresses.
@@ -313,19 +314,6 @@ fn delay() {
     }
 }
 
-// Normal-operation delay with regular UART input servicing.
-// Approximately the same spin-loop count as delay(), but
-// split into smaller pieces for interactive responsiveness.
-fn delay_with_console(shell: &mut console::Console) {
-    for _ in 0..200 {
-        shell.poll();
-
-        for _ in 0..5_000 {
-            core::hint::spin_loop();
-        }
-    }
-}
-
 // Write one word of the exported SRAM crash record.
 #[inline(always)]
 fn fault_record_write(index: usize, value: u32) {
@@ -518,13 +506,22 @@ pub extern "C" fn rust_main() -> ! {
         fault_signal(9, 0);
     }
 
+    // Start the RP2350 hardware microsecond counter.
+    if !timer::init() {
+        uart::write_str("ERROR: TIMER0 initialization failed\r\n");
+
+        // Ten LED flashes indicate timer initialization failure.
+        fault_signal(10, 0);
+    }
+
     uart::write_str("\r\n");
     uart::write_str("================================\r\n");
     uart::write_str(" RUSTPICO2 - BARE METAL RP2350\r\n");
     uart::write_str("================================\r\n");
     uart::write_str("CPU: ARM Cortex-M33\r\n");
     uart::write_str("Runtime: custom no_std Rust\r\n");
-    uart::write_str("Clock: XOSC 12 MHz -> CLK_PERI\r\n");
+    uart::write_str("Clock: XOSC 12 MHz -> CLK_PERI + CLK_REF\r\n");
+    uart::write_str("Timer: TIMER0, 1 MHz hardware timebase\r\n");
     uart::write_str("UART0: 115200 8N1\r\n");
     uart::write_str("UART0 TX: GPIO0\r\n");
     uart::write_str("UART0 RX: GPIO1\r\n");
@@ -549,31 +546,49 @@ pub extern "C" fn rust_main() -> ! {
         core::arch::asm!("udf #0", options(noreturn));
     }
 
+    // Hardware-timed event scheduling.
+    const LED_HALF_PERIOD_US: u64 = 500_000;
+    const HEARTBEAT_PERIOD_US: u64 = 8_000_000;
+
     let mut blink_cycles = 0u32;
+    let mut led_on = false;
+
+    let mut last_led_event = timer::micros();
+    let mut last_heartbeat = last_led_event;
 
     loop {
-        // LED on.
-        unsafe {
-            write_reg(SIO_GPIO_OUT_SET, LED_MASK);
+        // Service serial commands without intentional delays.
+        shell.poll();
+
+        let now = timer::micros();
+
+        // Toggle the LED every 500 milliseconds.
+        if now.wrapping_sub(last_led_event) >= LED_HALF_PERIOD_US {
+            last_led_event = now;
+            led_on = !led_on;
+
+            if led_on {
+                unsafe {
+                    write_reg(SIO_GPIO_OUT_SET, LED_MASK);
+                }
+            } else {
+                unsafe {
+                    write_reg(SIO_GPIO_OUT_CLR, LED_MASK);
+                }
+
+                // A complete on/off cycle has finished.
+                blink_cycles = blink_cycles.wrapping_add(1);
+                shell.set_blink_cycles(blink_cycles);
+            }
         }
 
-        delay_with_console(&mut shell);
-
-        // LED off.
-        unsafe {
-            write_reg(SIO_GPIO_OUT_CLR, LED_MASK);
-        }
-
-        delay_with_console(&mut shell);
-
-        blink_cycles = blink_cycles.wrapping_add(1);
-        shell.set_blink_cycles(blink_cycles);
-
-        // Send a heartbeat once every eight LED cycles.
-        // This lets a serial terminal connect after boot.
-        if (blink_cycles & 7) == 0 {
+        // Emit a heartbeat approximately every 8 seconds.
+        if now.wrapping_sub(last_heartbeat) >= HEARTBEAT_PERIOD_US {
+            last_heartbeat = now;
             shell.heartbeat();
         }
+
+        core::hint::spin_loop();
     }
 }
 

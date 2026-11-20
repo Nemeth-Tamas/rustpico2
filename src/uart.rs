@@ -252,6 +252,30 @@ pub fn read_byte() -> Option<u8> {
     Some((data & 0xFF) as u8)
 }
 
+/// Write an unsigned 64-bit integer in decimal.
+///
+/// Uses a fixed stack buffer, no allocation and no std.
+pub fn write_u64_decimal(mut value: u64) {
+    let mut digits = [0u8; 20];
+    let mut index = digits.len();
+
+    loop {
+        index -= 1;
+        digits[index] = b'0' + (value % 10) as u8;
+        value /= 10;
+
+        if value == 0 {
+            break;
+        }
+    }
+
+    for &byte in &digits[index..] {
+        if !write_byte(byte) {
+            return;
+        }
+    }
+}
+
 /// Write a 32-bit integer as eight uppercase hex digits.
 /// Example: 0xFA172350
 pub fn write_hex32(value: u32) {

@@ -204,7 +204,11 @@ A verified undefined-instruction UsageFault produces
 - [x] Implement initial fault-register decoding helpers.
 - [x] Implement the fault command for SRAM record inspection.
 - [x] Implement automatic UART exception diagnostics.
-- [ ] Verify printed fault report on physical hardware.
+- [x] Verify printed fault report on physical hardware.
+
+Hardware confirmation: November 20, 2026.
+UART reported UsageFault with CFSR=0x00010000,
+PC=0x1000081C and a valid exception frame.
 - [ ] Investigate persistent crash records.
 - [ ] Explore robust stack-overflow recovery.
 - [ ] Support extended exception frames.
@@ -283,15 +287,19 @@ The existing CPU clock is not reconfigured.
 - [x] Prevent heartbeat messages while typing.
 - [x] Create bidirectional PowerShell serial monitor.
 - [x] Integrate serial monitor with Just.
-- [ ] Build and flash normal firmware.
-- [ ] Verify normal LED blinking.
-- [ ] Verify interactive shell prompt.
-- [ ] Test help, ping, status and echo.
-- [ ] Verify fault command reports no previous crash.
-- [ ] Trigger crash udf and inspect UART fault report.
-- [ ] Verify six-short/one-long LED pattern.
-- [ ] Restore normal firmware.
-- [ ] Commit and push Milestone 3B.
+- [x] Build and flash normal firmware.
+- [x] Verify normal LED blinking.
+- [x] Verify interactive shell prompt.
+- [x] Test help, ping and echo.
+- [ ] Explicitly verify status output.
+- [x] Verify fault command reports no previous crash.
+- [x] Trigger crash udf and inspect UART fault report.
+- [ ] Confirm six-short/one-long LED pattern after shell crash.
+- [ ] Explicitly confirm restored normal firmware.
+- [x] Commit and push Milestone 3B.
+
+Hardware confirmation: November 20, 2026.
+Bidirectional UART console and on-demand crash reporting passed.
 
 Hardware:
   GPIO0 (physical pin 1) -> USB-TTL RX
@@ -317,7 +325,46 @@ then enters its repeating LED fault pattern.
 The SRAM crash record is not persistent across resets.
 The fault command on a fresh boot should report no record.
 
-### Milestone 3C — Advanced Console
+### Milestone 3C.1 — Hardware Timer and Nonblocking Main Loop
+
+- [x] Create src/timer.rs.
+- [x] Configure CLK_REF to use 12 MHz XOSC.
+- [x] Configure the dedicated TIMER0 tick generator.
+- [x] Release TIMER0 from reset.
+- [x] Verify TIMER0 advances during initialization.
+- [x] Implement coherent 64-bit microsecond reads.
+- [x] Add millisecond and second conversion functions.
+- [x] Implement decimal output without allocation.
+- [x] Add the uptime console command.
+- [x] Add uptime reporting to status.
+- [x] Replace normal-operation software delays.
+- [x] Implement hardware-timed 1 Hz LED blinking.
+- [x] Implement 8-second heartbeat scheduling.
+- [x] Preserve UART polling during normal operation.
+- [x] Retain independent fault LED delay fallback.
+- [x] Add LED fault code 10 for timer initialization failure.
+- [ ] Verify compilation.
+- [ ] Verify TIMER0 initialization on physical hardware.
+- [ ] Verify accurate LED blinking.
+- [ ] Verify uptime increases correctly.
+- [ ] Verify status displays hardware uptime.
+- [ ] Verify UART commands remain responsive.
+- [ ] Verify fault reporting still works.
+- [ ] Commit and push Milestone 3C.1.
+
+Hardware timer configuration:
+  TIMER0 base: 0x400B0000
+  TICKS base:  0x40108000
+  CLK_REF:     12 MHz XOSC
+  Tick divider: 12
+  Timer frequency: 1 MHz
+  Timer resolution: 1 microsecond
+
+The uptime counter starts during firmware initialization.
+Normal operation polls the hardware timebase.
+Interrupt-driven scheduling is a future milestone.
+
+### Milestone 3C.2 — Advanced Console
 
 - [ ] Add arbitrary safe register inspection commands.
 - [ ] Add memory map and RAM usage reporting.
@@ -331,11 +378,17 @@ The fault command on a fresh boot should report no record.
 
 ## Milestone 4 — Hardware Time
 
-- [ ] Hardware timers.
-- [ ] Interrupt handling.
-- [ ] NVIC configuration.
-- [ ] Accurate delays.
-- [ ] Uptime counter.
+- [x] Implement TIMER0 microsecond timebase.
+- [x] Implement 64-bit uptime counter.
+- [x] Implement hardware-timed LED scheduling.
+- [x] Implement hardware-timed heartbeat scheduling.
+- [ ] Verify actual timing on physical hardware.
+- [ ] Implement TIMER0 alarm interrupts.
+- [ ] Configure NVIC for timer interrupts.
+- [ ] Implement interrupt-driven scheduling.
+- [ ] Add low-power WFI idle support.
+- [ ] Implement timer-driven software tasks.
+- [ ] Investigate repeating and one-shot timers.
 
 ## Milestone 5 — Peripherals
 

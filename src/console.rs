@@ -123,12 +123,24 @@ fn execute_command(command: &str, blink_cycles: u32) {
             uart::write_str("  help       Show this help\r\n");
             uart::write_str("  ping       Test UART communication\r\n");
             uart::write_str("  status     Show firmware status\r\n");
+            uart::write_str("  uptime     Show hardware uptime\r\n");
             uart::write_str("  fault      Show SRAM crash record\r\n");
             uart::write_str("  echo TEXT  Echo text back\r\n");
             uart::write_str("  crash udf  Deliberate UsageFault!\r\n");
         }
         "ping" => {
             uart::write_str("PONG from RP2350!\r\n");
+        }
+        "uptime" => {
+            uart::write_str("Uptime: ");
+            uart::write_u64_decimal(crate::timer::seconds());
+            uart::write_str(" seconds (");
+            uart::write_u64_decimal(crate::timer::millis());
+            uart::write_str(" ms)\r\n");
+
+            uart::write_str("Raw TIMER0: ");
+            uart::write_u64_decimal(crate::timer::micros());
+            uart::write_str(" microseconds\r\n");
         }
         "status" => {
             uart::write_str("RUSTPICO2 STATUS\r\n");
@@ -140,6 +152,12 @@ fn execute_command(command: &str, blink_cycles: u32) {
             uart::write_str("  Fault handlers: ENABLED\r\n");
             uart::write_str("  Blink cycles: ");
             uart::write_hex32(blink_cycles);
+            uart::write_str("\r\n");
+
+            uart::write_str("  TIMER0: 1 MHz, 64-bit\r\n");
+
+            uart::write_str("  Uptime (ms): ");
+            uart::write_u64_decimal(crate::timer::millis());
             uart::write_str("\r\n");
         }
         "fault" => {
