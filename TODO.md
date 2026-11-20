@@ -75,8 +75,15 @@ Available commands:
     just build
     just flash
     just clean
+    just ports
+    just monitor COM7
     just status
     just push "commit message"
+
+Replace COM7 with the actual serial adapter port.
+
+UART monitoring uses Windows PowerShell's built-in
+System.IO.Ports.SerialPort implementation.
 
 Fault-injection builds:
 
@@ -145,12 +152,16 @@ Normal operation and deliberate fault injection both passed.
 - [x] Export FAULT_RECORD for future debugging.
 - [x] Add record validity flags and magic marker.
 - [x] Add verified UDF fault LED detail pattern.
-- [ ] Build and test normal firmware.
-- [ ] Confirm normal blinking.
-- [ ] Confirm Rust panic still gives 2 flashes.
-- [ ] Confirm UDF gives 6 flashes plus 1 long flash.
-- [ ] Restore normal firmware.
-- [ ] Commit and push Milestone 2C.1.
+- [x] Build and test normal firmware.
+- [x] Confirm normal blinking.
+- [x] Confirm Rust panic still gives 2 flashes.
+- [x] Confirm UDF gives 6 flashes plus 1 long flash.
+- [x] Restore normal firmware.
+- [x] Commit and push Milestone 2C.1.
+
+Hardware confirmation: November 20, 2026.
+The deliberate UsageFault generated six short LED flashes
+followed by one long flash. Fault frame verification passed.
 
 FAULT_RECORD is an exported 20-word array in SRAM.
 Magic word: 0xFA172350.
@@ -200,12 +211,63 @@ A verified undefined-instruction UsageFault produces
 
 ## Milestone 3 — UART
 
-- [ ] Configure system clocks.
-- [ ] Initialize UART0 using MMIO.
-- [ ] Print first boot banner.
-- [ ] Implement UART transmit.
-- [ ] Implement UART receive.
-- [ ] Add a minimal serial command interface.
+### Milestone 3A — UART0 Transmitter
+
+- [x] Create src/uart.rs with no external crates.
+- [x] Implement volatile UART register access.
+- [x] Configure Pico 2 12 MHz crystal oscillator.
+- [x] Configure CLK_PERI from XOSC.
+- [x] Configure GPIO0 for UART0 TX.
+- [x] Release UART0 from reset.
+- [x] Configure UART0 for 115200 baud, 8N1.
+- [x] Implement bounded transmit FIFO polling.
+- [x] Implement UART string output.
+- [x] Add startup serial banner.
+- [x] Add periodic heartbeat output.
+- [x] Add UART initialization failure LED code 9.
+- [x] Add Just serial port discovery.
+- [x] Add Just serial monitor recipe.
+- [ ] Compile normal firmware.
+- [ ] Flash and confirm LED blinking.
+- [ ] Verify UART0 output with serial adapter.
+- [ ] Confirm startup banner.
+- [ ] Confirm periodic heartbeat.
+- [ ] Commit and push Milestone 3A.
+
+Hardware:
+  Pico 2 GPIO0, physical pin 1 -> USB-TTL RX
+  Pico 2 GND, physical pin 3 -> USB-TTL GND
+
+Serial parameters:
+  Baud: 115200
+  Data bits: 8
+  Parity: none
+  Stop bits: 1
+  Flow control: none
+  Logic level: 3.3 V
+
+The Pico 2 is powered through its own USB connection.
+The USB-to-TTL adapter is for external UART monitoring only.
+Do not connect the adapter VCC pin.
+
+Clock configuration:
+  XOSC = 12 MHz
+  CLK_PERI = XOSC / 1
+  UART IBRD = 6
+  UART FBRD = 33
+
+The existing CPU clock is not reconfigured.
+
+### Milestone 3B — UART Receiver and Console
+
+- [ ] Configure GPIO1 for UART0 RX.
+- [ ] Implement nonblocking UART receive.
+- [ ] Implement line buffering.
+- [ ] Implement a tiny command parser.
+- [ ] Add help and status commands.
+- [ ] Add memory and register inspection commands.
+- [ ] Add crash record reporting.
+- [ ] Integrate UART diagnostics with panic handling.
 
 ## Milestone 4 — Hardware Time
 

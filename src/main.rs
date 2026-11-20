@@ -5,6 +5,8 @@ use core::arch::global_asm;
 use core::panic::PanicInfo;
 use core::ptr::{read_volatile, write_volatile};
 
+mod uart;
+
 // RP2350 peripheral addresses.
 const RESETS_RESET_CLR: usize = 0x4002_3000;
 const RESETS_RESET_DONE: usize = 0x4002_0008;
@@ -492,6 +494,24 @@ pub extern "C" fn rust_main() -> ! {
         }
     }
 
+    // Initialize UART0 once RAM and GPIO are operational.
+    if !uart::init() {
+        // Nine LED flashes means UART/clock initialization failed.
+        fault_signal(9, 0);
+    }
+
+    uart::write_str("\r\n");
+    uart::write_str("================================\r\n");
+    uart::write_str(" RUSTPICO2 - BARE METAL RP2350\r\n");
+    uart::write_str("================================\r\n");
+    uart::write_str("CPU: ARM Cortex-M33\r\n");
+    uart::write_str("Runtime: custom no_std Rust\r\n");
+    uart::write_str("Clock: XOSC 12 MHz -> CLK_PERI\r\n");
+    uart::write_str("UART0: 115200 8N1, GPIO0 TX\r\n");
+    uart::write_str("RAM initialization: PASS\r\n");
+    uart::write_str("Fault handlers: ENABLED\r\n");
+    uart::write_str("Status: BOOT OK\r\n\r\n");
+
     // Optional deliberate crash tests.
     // Normal firmware does not compile either block.
 
@@ -504,6 +524,8 @@ pub extern "C" fn rust_main() -> ! {
         // when the configurable exception is enabled.
         core::arch::asm!("udf #0", options(noreturn));
     }
+
+    let mut blink_cycles = 0u32;
 
     loop {
         // LED on.
@@ -519,6 +541,14 @@ pub extern "C" fn rust_main() -> ! {
         }
 
         delay();
+
+        blink_cycles = blink_cycles.wrapping_add(1);
+
+        // Send a heartbeat once every eight LED cycles.
+        // This lets a serial terminal connect after boot.
+        if (blink_cycles & 7) == 0 {
+            uart::write_str("RUSTPICO2: alive\r\n");
+        }
     }
 }
 
