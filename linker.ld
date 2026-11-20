@@ -74,11 +74,20 @@ ASSERT(
 );
 
 ASSERT(
-    SIZEOF(.data) == 0,
-    "Milestone 1 does not initialize .data"
+    SIZEOF(.vector_table) == 272,
+    "RP2350 vector table must contain 68 entries"
 );
 
 ASSERT(
-    SIZEOF(.bss) == 0,
-    "Milestone 1 does not initialize .bss"
+    ADDR(.image_def) == ORIGIN(FLASH) + 0x110,
+    "RP2350 image definition must begin at flash offset 0x110"
+);
+
+ASSERT(
+    (__sidata % 4) == 0 &&
+    (__sdata % 4) == 0 &&
+    (__edata % 4) == 0 &&
+    (__sbss % 4) == 0 &&
+    (__ebss % 4) == 0,
+    "RAM initialization regions must be word-aligned"
 );

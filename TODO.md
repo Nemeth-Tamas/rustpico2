@@ -8,7 +8,9 @@ Firmware: Rust no_std, no HAL, no SDK
 ## Rules
 
 - GitHub master is the source of truth.
-- Full-file replacements for every code change.
+- Fetch exact current source from GitHub before every edit.
+- Use exact FIND and REPLACE blocks, not whole-file replacements.
+- No leading or trailing blank lines inside code blocks.
 - No third-party firmware dependencies.
 - Host development dependencies are allowed.
 - No vendor SDK, HAL, Embassy, or Zephyr.
@@ -53,9 +55,11 @@ First bare-metal RP2350 firmware successfully executed.
 - [x] Add cleanup command.
 - [x] Add Git commit/push command.
 - [x] Correct Cargo release profile typo.
-- [ ] Verify Just recipes on Windows.
-- [ ] Test automatic flashing.
-- [ ] Commit and push Milestone 1.1.
+- [x] Verify Just recipes on Windows.
+- [x] Test automatic flashing.
+- [x] Commit and push Milestone 1.1.
+
+Automation confirmed working on November 20, 2026.
 
 ## Development Commands
 
@@ -81,11 +85,26 @@ Target firmware remains no_std and dependency-free.
 
 ## Milestone 2 — Startup Improvements
 
-- [ ] Initialize .data from flash.
-- [ ] Clear .bss.
+### Milestone 2A — RAM Initialization
+
+- [x] Implement .data copying from flash to RAM.
+- [x] Implement .bss zero initialization.
+- [x] Add initialized and zero-initialized RAM test variables.
+- [x] Add volatile RAM verification.
+- [x] Add solid-LED failure indicator.
+- [x] Assert vector table size and IMAGE_DEF offset.
+- [x] Assert word alignment of RAM initialization regions.
+- [ ] Build and test on physical Pico 2.
+- [ ] Confirm normal LED blink after RAM self-test.
+- [ ] Commit and push Milestone 2A.
+
+### Milestone 2B — Fault Handling and Stack Safety
+
 - [ ] Add stack layout and guards.
 - [ ] Implement panic and fault diagnostics.
-- [ ] Verify vector table and memory map.
+- [ ] Verify complete vector table and memory map.
+- [ ] Investigate ARM Cortex-M33 fault status registers.
+- [ ] Provide distinguishable LED fault patterns.
 
 ## Milestone 3 — UART
 

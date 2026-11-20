@@ -29,6 +29,15 @@ const GPIO_FUNC_SIO: u32 = 5;
 // Pad isolation control.
 const PAD_ISO: u32 = 1 << 8;
 
+// Real writable RAM variables used to verify startup initialization.
+// The nonzero initializer belongs in .data.
+// The zero initializer belongs in .bss.
+const BOOT_DATA_MAGIC: u32 = 0x2350_DA7A;
+const BOOT_BSS_MAGIC: u32 = 0xA55A_5AA5;
+
+static mut BOOT_DATA_MARKER: u32 = BOOT_DATA_MAGIC;
+static mut BOOT_BSS_MARKER: u32 = 0;
+
 // ARM Cortex-M33 startup and RP2350 image metadata.
 global_asm!(
     r#"
@@ -74,11 +83,44 @@ Reset_Handler:
     movs r0, #0
     msr MSPLIM, r0
 
-    // Enter our Rust firmware.
-    bl rust_main
+    // Copy initialized .data from flash to RAM.
+    // r0 = source in flash
+    // r1 = destination in RAM
+    // r2 = destination end
+    ldr r0, =__sidata
+    ldr r1, =__sdata
+    ldr r2, =__edata
 
 1:
+    cmp r1, r2
+    bhs 2f
+
+    ldr r3, [r0], #4
+    str r3, [r1], #4
     b 1b
+
+2:
+    // Clear .bss to zero.
+    ldr r1, =__sbss
+    ldr r2, =__ebss
+    movs r3, #0
+
+3:
+    cmp r1, r2
+    bhs 4f
+
+    str r3, [r1], #4
+    b 3b
+
+4:
+    // RAM is initialized. Rust may now safely execute.
+    bl rust_main
+
+5:
+    b 5b
+
+    // Literal constants used by the address loads.
+    .ltorg
 
     .size Reset_Handler, .-Reset_Handler
 
@@ -131,6 +173,25 @@ fn initialize_led() {
     }
 }
 
+fn ram_self_test() -> bool {
+    unsafe {
+        // Check that the initialized value was copied from flash.
+        if read_volatile(&raw const BOOT_DATA_MARKER) != BOOT_DATA_MAGIC {
+            return false;
+        }
+
+        // Check that .bss was cleared to zero.
+        if read_volatile(&raw const BOOT_BSS_MARKER) != 0 {
+            return false;
+        }
+
+        // Verify that the RAM variable is actually writable.
+        write_volatile(&raw mut BOOT_BSS_MARKER, BOOT_BSS_MAGIC);
+
+        read_volatile(&raw const BOOT_BSS_MARKER) == BOOT_BSS_MAGIC
+    }
+}
+
 #[inline(never)]
 fn delay() {
     // Rough delay only. We have not configured a clock or
@@ -143,6 +204,17 @@ fn delay() {
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_main() -> ! {
     initialize_led();
+
+    if !ram_self_test() {
+        // Solid LED indicates RAM initialization failure.
+        unsafe {
+            write_reg(SIO_GPIO_OUT_SET, LED_MASK);
+        }
+
+        loop {
+            core::hint::spin_loop();
+        }
+    }
 
     loop {
         // LED on.
