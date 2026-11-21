@@ -125,6 +125,7 @@ fn execute_command(command: &str, blink_cycles: u32) {
             uart::write_str("  status     Show firmware status\r\n");
             uart::write_str("  uptime     Show hardware uptime\r\n");
             uart::write_str("  irq        Show TIMER0 interrupt count\r\n");
+            uart::write_str("  rxstats    Show UART RX interrupt statistics\r\n");
             uart::write_str("  fault      Show SRAM crash record\r\n");
             uart::write_str("  echo TEXT  Echo text back\r\n");
             uart::write_str("  crash udf  Deliberate UsageFault!\r\n");
@@ -140,6 +141,29 @@ fn execute_command(command: &str, blink_cycles: u32) {
             uart::write_str("Elapsed timer time (ms): ");
             uart::write_u64_decimal(crate::timer::millis());
             uart::write_str("\r\n");
+        }
+        "rxstats" => {
+            uart::write_str("UART0 RX STATISTICS\r\n");
+
+            uart::write_str("  Interrupts: ");
+            uart::write_u64_decimal(u64::from(uart::rx_irq_count()));
+            uart::write_str("\r\n");
+
+            uart::write_str("  Bytes queued: ");
+            uart::write_u64_decimal(u64::from(uart::rx_accepted()));
+            uart::write_str("\r\n");
+
+            uart::write_str("  Bytes dropped: ");
+            uart::write_u64_decimal(u64::from(uart::rx_dropped()));
+            uart::write_str("\r\n");
+
+            uart::write_str("  UART errors: ");
+            uart::write_u64_decimal(u64::from(uart::rx_errors()));
+            uart::write_str("\r\n");
+
+            uart::write_str("  Queue occupancy: ");
+            uart::write_u64_decimal(u64::from(uart::rx_pending()));
+            uart::write_str("/128\r\n");
         }
         "uptime" => {
             uart::write_str("Uptime: ");
@@ -174,6 +198,16 @@ fn execute_command(command: &str, blink_cycles: u32) {
 
             uart::write_str("  Timer interrupts: ");
             uart::write_u64_decimal(u64::from(crate::timer::irq_count()));
+            uart::write_str("\r\n");
+
+            uart::write_str("  UART RX IRQ33: ENABLED\r\n");
+
+            uart::write_str("  UART RX interrupts: ");
+            uart::write_u64_decimal(u64::from(uart::rx_irq_count()));
+            uart::write_str("\r\n");
+
+            uart::write_str("  UART RX dropped: ");
+            uart::write_u64_decimal(u64::from(uart::rx_dropped()));
             uart::write_str("\r\n");
         }
         "fault" => {

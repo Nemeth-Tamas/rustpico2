@@ -373,8 +373,10 @@ Interrupt-driven scheduling is a future milestone.
 - [ ] Add arbitrary safe register inspection commands.
 - [ ] Add memory map and RAM usage reporting.
 - [ ] Add numerical argument parsing.
-- [ ] Implement interrupt-driven UART RX.
-- [ ] Add RX ring buffer and overrun statistics.
+- [x] Implement interrupt-driven UART RX.
+- [x] Add RX ring buffer and overrun statistics.
+- [ ] Verify interrupt-driven UART RX on hardware.
+- [ ] Verify ring buffer overflow accounting.
 - [x] Add hardware timer-based uptime.
 - [ ] Add command history and basic editing.
 - [ ] Add a controlled software reboot command.
@@ -406,13 +408,19 @@ Interrupt-driven scheduling is a future milestone.
 - [x] Replace normal main-loop busy-spin with WFI.
 - [x] Add irq console command.
 - [x] Add interrupt statistics to status.
-- [ ] Compile and flash normal firmware.
-- [ ] Verify interrupt counter increases.
-- [ ] Verify IRQ count tracks elapsed milliseconds.
-- [ ] Verify UART input works during WFI operation.
-- [ ] Verify LED and heartbeat still work.
+- [x] Compile and flash normal firmware.
+- [x] Verify interrupt counter increases.
+- [x] Verify IRQ count tracks elapsed milliseconds.
+- [x] Verify UART input works during WFI operation.
+- [x] Verify serial heartbeat still works.
+- [ ] Verify LED blink timing under interrupt load.
 - [ ] Verify panic and UsageFault reporting still work.
-- [ ] Commit and push Milestone 4B.
+- [x] Commit and push Milestone 4B.
+
+Hardware confirmation: November 20, 2026.
+TIMER0 interrupt count increased from 35620 to 46968
+while elapsed time advanced from 35728 ms to 47110 ms.
+The UART console remained responsive during WFI operation.
 
 Implementation notes:
   TIMER0 base: 0x400B0000
@@ -434,9 +442,57 @@ WFI provides ordinary CPU sleep, not deep sleep.
 UART reception is still polled after each timer wake.
 Interrupt-driven UART RX is a future milestone.
 
+### Milestone 4C — Interrupt-driven UART RX
+
+- [x] Identify UART0 as RP2350 external IRQ 33.
+- [x] Install UART0 handler at vector table slot 49.
+- [x] Configure NVIC register bank 1, bit 1.
+- [x] Enable UART RX FIFO and timeout interrupts.
+- [x] Implement UART0 interrupt service routine.
+- [x] Create 128-byte lock-free SPSC RX ring buffer.
+- [x] Use atomic head and tail indices.
+- [x] Implement Acquire/Release queue synchronization.
+- [x] Keep UART transmit outside interrupt context.
+- [x] Preserve early-boot polling fallback.
+- [x] Track UART interrupt count.
+- [x] Track accepted and dropped bytes.
+- [x] Track UART receive errors.
+- [x] Add rxstats console command.
+- [x] Add RX interrupt statistics to status.
+- [x] Add startup failure LED code 12.
+- [ ] Compile and flash firmware.
+- [ ] Confirm regular LED blinking.
+- [ ] Confirm ping, help, status and uptime.
+- [ ] Confirm rxstats interrupt count increases.
+- [ ] Confirm no dropped bytes during ordinary typing.
+- [ ] Test long input and line buffer overflow.
+- [ ] Confirm TIMER0 IRQ0 still runs.
+- [ ] Retest crash udf and serial fault reporting.
+- [ ] Restore normal firmware.
+- [ ] Commit and push Milestone 4C.
+
+UART0 interrupt configuration:
+  RP2350 UART0_IRQ = 33
+  Cortex-M33 vector table slot = 49
+  NVIC register bank = 1
+  NVIC bit = 1
+  UARTIMSC = UART0 + 0x38
+  UARTMIS  = UART0 + 0x40
+  UARTICR  = UART0 + 0x44
+
+Software RX buffer:
+  Capacity = 128 bytes
+  Producer = UART0 IRQ handler
+  Consumer = main-thread Console::poll()
+  Synchronization = AtomicU32 head/tail
+  Overflow policy = drop incoming bytes and count them
+
+The TIMER0 1 ms interrupt continues running.
+Dynamic event-driven timer scheduling is the next milestone.
+
 ### Future Hardware Scheduling
 
-- [ ] Implement UART RX interrupts and a ring buffer.
+- [x] Implement UART RX interrupts and a ring buffer.
 - [ ] Implement dynamically scheduled timer alarms.
 - [ ] Wake only when the next task is actually due.
 - [ ] Implement timer-driven software tasks.

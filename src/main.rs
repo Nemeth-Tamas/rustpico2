@@ -123,8 +123,16 @@ __vector_table:
     // External IRQ 0 = TIMER0_IRQ_0, vector table slot 16.
     .word timer0_irq0_handler
 
-    // Remaining external interrupts, IRQ 1 through IRQ 51.
-    .rept 51
+    // External IRQ 1 through IRQ 32.
+    .rept 32
+        .word Default_Handler
+    .endr
+
+    // External IRQ 33 = UART0_IRQ, vector table slot 49.
+    .word uart0_irq_handler
+
+    // External IRQ 34 through IRQ 51.
+    .rept 18
         .word Default_Handler
     .endr
 
@@ -527,6 +535,14 @@ pub extern "C" fn rust_main() -> ! {
         fault_signal(11, 0);
     }
 
+    // UART0 receives data through external IRQ 33.
+    if !uart::start_rx_irq() {
+        uart::write_str("ERROR: UART0 RX IRQ setup failed\r\n");
+
+        // Twelve flashes indicate UART IRQ setup failure.
+        fault_signal(12, 0);
+    }
+
     uart::write_str("\r\n");
     uart::write_str("================================\r\n");
     uart::write_str(" RUSTPICO2 - BARE METAL RP2350\r\n");
@@ -540,6 +556,7 @@ pub extern "C" fn rust_main() -> ! {
     uart::write_str("UART0: 115200 8N1\r\n");
     uart::write_str("UART0 TX: GPIO0\r\n");
     uart::write_str("UART0 RX: GPIO1\r\n");
+    uart::write_str("UART0 RX IRQ: 33, 128-byte ring buffer\r\n");
     uart::write_str("RAM initialization: PASS\r\n");
     uart::write_str("Fault handlers: ENABLED\r\n");
     uart::write_str("Status: BOOT OK\r\n\r\n");

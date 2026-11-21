@@ -9,7 +9,7 @@
 
 use core::hint::spin_loop;
 use core::ptr::{read_volatile, write_volatile};
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 // RP2350 clock and oscillator registers.
 const XOSC_CTRL: usize = 0x4004_8000;
@@ -50,7 +50,20 @@ const UART_IBRD: usize = UART0_BASE + 0x024;
 const UART_FBRD: usize = UART0_BASE + 0x028;
 const UART_LCR_H: usize = UART0_BASE + 0x02C;
 const UART_CR: usize = UART0_BASE + 0x030;
+const UART_IMSC: usize = UART0_BASE + 0x038;
+const UART_MIS: usize = UART0_BASE + 0x040;
 const UART_ICR: usize = UART0_BASE + 0x044;
+
+// PL011 receive interrupt and receive-timeout interrupt.
+const UART_RX_IRQ: u32 = 1 << 4;
+const UART_RT_IRQ: u32 = 1 << 6;
+const UART_RX_IRQ_MASK: u32 = UART_RX_IRQ | UART_RT_IRQ;
+
+// RP2350 UART0 is external IRQ 33 (NVIC register bank 1).
+const NVIC_ISER1: usize = 0xE000_E104;
+const NVIC_ICER1: usize = 0xE000_E184;
+const NVIC_ICPR1: usize = 0xE000_E284;
+const UART0_NVIC_BIT: u32 = 1 << (33 - 32);
 
 const UART_FR_TXFF: u32 = 1 << 5;
 const UART_FR_RXFE: u32 = 1 << 4;
@@ -78,6 +91,23 @@ const UART_8N1_FIFO: u32 = (3 << 5) | (1 << 4);
 
 // UART is usable only after the entire initialization succeeds.
 static UART_READY: AtomicBool = AtomicBool::new(false);
+
+// Single-producer/single-consumer UART RX ring buffer.
+// Producer: UART0 interrupt handler.
+// Consumer: the main thread running Console::poll().
+const RX_CAPACITY: u32 = 128;
+const RX_MASK: u32 = RX_CAPACITY - 1;
+
+static mut RX_RING: [u8; RX_CAPACITY as usize] = [0; RX_CAPACITY as usize];
+
+static RX_IRQ_ACTIVE: AtomicBool = AtomicBool::new(false);
+static RX_HEAD: AtomicU32 = AtomicU32::new(0);
+static RX_TAIL: AtomicU32 = AtomicU32::new(0);
+
+static RX_IRQ_COUNT: AtomicU32 = AtomicU32::new(0);
+static RX_ACCEPTED: AtomicU32 = AtomicU32::new(0);
+static RX_DROPPED: AtomicU32 = AtomicU32::new(0);
+static RX_ERRORS: AtomicU32 = AtomicU32::new(0);
 
 #[inline(always)]
 fn read32(address: usize) -> u32 {
@@ -112,6 +142,7 @@ fn wait_bit(address: usize, mask: u32, expected_set: bool) -> bool {
 /// or UART reset controller fails to become ready.
 pub fn init() -> bool {
     UART_READY.store(false, Ordering::Release);
+    RX_IRQ_ACTIVE.store(false, Ordering::Release);
 
     // Keep UART0 in reset during clock configuration.
     write32(RESETS_SET, RESET_UART0);
@@ -165,6 +196,10 @@ pub fn init() -> bool {
     // PL011 latches the divisor on the LCR_H write.
     write32(UART_LCR_H, UART_8N1_FIFO);
 
+    // Start with all UART interrupt sources disabled.
+    // The RX interrupt will be configured separately.
+    write32(UART_IMSC, 0);
+
     // Clear pending UART interrupt status.
     write32(UART_ICR, 0x7FF);
 
@@ -200,6 +235,53 @@ pub fn is_ready() -> bool {
     UART_READY.load(Ordering::Acquire)
 }
 
+/// Enable interrupt-driven UART0 reception.
+///
+/// TIMER0 IRQ setup has already enabled CPU interrupts.
+/// This function configures the UART0 interrupt source and
+/// enables external interrupt 33 in NVIC register bank 1.
+pub fn start_rx_irq() -> bool {
+    if !is_ready() {
+        return false;
+    }
+
+    // Disable UART0's NVIC line during configuration.
+    write32(NVIC_ICER1, UART0_NVIC_BIT);
+
+    // Mask RX interrupt sources while resetting the queue.
+    write32(UART_IMSC, 0);
+
+    RX_HEAD.store(0, Ordering::Relaxed);
+    RX_TAIL.store(0, Ordering::Relaxed);
+    RX_IRQ_COUNT.store(0, Ordering::Relaxed);
+    RX_ACCEPTED.store(0, Ordering::Relaxed);
+    RX_DROPPED.store(0, Ordering::Relaxed);
+    RX_ERRORS.store(0, Ordering::Relaxed);
+
+    // Acknowledge any previously latched RX interrupts.
+    write32(UART_ICR, UART_RX_IRQ_MASK);
+
+    // Clear pending interrupt 33 at the NVIC.
+    write32(NVIC_ICPR1, UART0_NVIC_BIT);
+
+    // From here, the main thread reads the software queue.
+    RX_IRQ_ACTIVE.store(true, Ordering::Release);
+
+    // Enable both RX FIFO-level and RX timeout interrupts.
+    // RX timeout is essential when only one byte arrives
+    // and the FIFO threshold has not been reached.
+    write32(UART_IMSC, UART_RX_IRQ_MASK);
+
+    // Enable external IRQ 33.
+    write32(NVIC_ISER1, UART0_NVIC_BIT);
+
+    let uart_enabled = (read32(UART_IMSC) & UART_RX_IRQ_MASK) == UART_RX_IRQ_MASK;
+
+    let nvic_enabled = (read32(NVIC_ISER1) & UART0_NVIC_BIT) != 0;
+
+    uart_enabled && nvic_enabled
+}
+
 /// Transmit one byte, with a bounded FIFO wait.
 fn write_byte(byte: u8) -> bool {
     if !is_ready() {
@@ -229,14 +311,36 @@ pub fn write_str(message: &str) {
 
 /// Read one UART0 byte without blocking.
 ///
-/// Returns None if no byte is ready or the received
-/// character has a UART framing, parity, break or
-/// overrun error.
+/// After RX interrupts are enabled, bytes come exclusively
+/// from the single-producer/single-consumer ring buffer.
+///
+/// Before interrupt setup, retain the original polled
+/// hardware FIFO reader.
 pub fn read_byte() -> Option<u8> {
     if !is_ready() {
         return None;
     }
 
+    if RX_IRQ_ACTIVE.load(Ordering::Acquire) {
+        let tail = RX_TAIL.load(Ordering::Relaxed);
+        let head = RX_HEAD.load(Ordering::Acquire);
+
+        if tail == head {
+            return None;
+        }
+
+        let index = (tail & RX_MASK) as usize;
+
+        let byte = unsafe {
+            let base = (&raw const RX_RING).cast::<u8>();
+            read_volatile(base.add(index))
+        };
+
+        RX_TAIL.store(tail.wrapping_add(1), Ordering::Release);
+        return Some(byte);
+    }
+
+    // Fallback for early boot before RX interrupts start.
     if (read32(UART_FR) & UART_FR_RXFE) != 0 {
         return None;
     }
@@ -244,12 +348,88 @@ pub fn read_byte() -> Option<u8> {
     let data = read32(UART_DR);
 
     if (data & UART_DR_ERROR_MASK) != 0 {
-        // Clear the receive error flags.
         write32(UART_RSR_ECR, 0xF);
         return None;
     }
 
     Some((data & 0xFF) as u8)
+}
+
+/// UART0 interrupt service routine.
+///
+/// Runs asynchronously when the RX FIFO reaches its
+/// threshold or when the receive-timeout interrupt fires.
+///
+/// Never prints or calls the console from inside the ISR.
+#[unsafe(no_mangle)]
+pub extern "C" fn uart0_irq_handler() {
+    if (read32(UART_MIS) & UART_RX_IRQ_MASK) == 0 {
+        return;
+    }
+
+    RX_IRQ_COUNT.fetch_add(1, Ordering::Relaxed);
+
+    // Drain the hardware FIFO into our software ring.
+    // The bounded loop protects interrupt latency.
+    for _ in 0..64 {
+        if (read32(UART_FR) & UART_FR_RXFE) != 0 {
+            break;
+        }
+
+        let data = read32(UART_DR);
+
+        if (data & UART_DR_ERROR_MASK) != 0 {
+            RX_ERRORS.fetch_add(1, Ordering::Relaxed);
+            write32(UART_RSR_ECR, 0xF);
+            continue;
+        }
+
+        let head = RX_HEAD.load(Ordering::Relaxed);
+        let tail = RX_TAIL.load(Ordering::Acquire);
+
+        if head.wrapping_sub(tail) >= RX_CAPACITY {
+            // Ring is full. Drop this byte rather than
+            // overwriting data the console has not read.
+            RX_DROPPED.fetch_add(1, Ordering::Relaxed);
+            continue;
+        }
+
+        let index = (head & RX_MASK) as usize;
+
+        unsafe {
+            let base = (&raw mut RX_RING).cast::<u8>();
+            write_volatile(base.add(index), (data & 0xFF) as u8);
+        }
+
+        RX_HEAD.store(head.wrapping_add(1), Ordering::Release);
+        RX_ACCEPTED.fetch_add(1, Ordering::Relaxed);
+    }
+
+    // Clear receive and timeout interrupt status.
+    write32(UART_ICR, UART_RX_IRQ_MASK);
+}
+
+/// UART receive statistics, recorded since RX IRQ startup.
+pub fn rx_irq_count() -> u32 {
+    RX_IRQ_COUNT.load(Ordering::Relaxed)
+}
+
+pub fn rx_accepted() -> u32 {
+    RX_ACCEPTED.load(Ordering::Relaxed)
+}
+
+pub fn rx_dropped() -> u32 {
+    RX_DROPPED.load(Ordering::Relaxed)
+}
+
+pub fn rx_errors() -> u32 {
+    RX_ERRORS.load(Ordering::Relaxed)
+}
+
+pub fn rx_pending() -> u32 {
+    let tail = RX_TAIL.load(Ordering::Acquire);
+    let head = RX_HEAD.load(Ordering::Acquire);
+    head.wrapping_sub(tail).min(RX_CAPACITY)
 }
 
 /// Write an unsigned 64-bit integer in decimal.
