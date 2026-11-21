@@ -62,7 +62,7 @@ const SCB_SCR: usize = 0xE000_ED10;
 const SCB_SLEEPDEEP: u32 = 1 << 2;
 
 const ALARM0_BIT: u32 = 1;
-const ALARM_INTERVAL_US: u32 = 1_000;
+const FIRST_ALARM_TEST_US: u32 = 1_000;
 
 // Updated only by the hardware interrupt handler.
 static ALARM0_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -178,10 +178,27 @@ pub fn irq_count() -> u32 {
     ALARM0_COUNT.load(Ordering::Relaxed)
 }
 
-/// Configure TIMER0 alarm 0 to interrupt roughly every 1 ms.
+/// Arm TIMER0 alarm 0 for an absolute microsecond deadline.
 ///
-/// The first interrupt must arrive within 50 ms or the
-/// initialization is considered unsuccessful.
+/// Caller must mask interrupts during alarm programming
+/// and its accompanying sleep decision.
+///
+/// Hardware compares only the lower 32 timer bits, so
+/// deadlines must be less than one 32-bit wrap away.
+/// Our scheduler always uses deadlines within 8 seconds.
+pub fn arm_alarm0(deadline_us: u64) {
+    // Clear stale alarm status before rearming.
+    write32(TIMER0_INTR, ALARM0_BIT);
+
+    // Writing ALARM0 arms the one-shot comparator.
+    write32(TIMER0_ALARM0, deadline_us as u32);
+}
+
+/// Enable TIMER0 alarm 0 and verify the first one-shot IRQ.
+///
+/// The startup test uses a 1 ms deadline. Once it fires,
+/// the main thread takes responsibility for scheduling
+/// all subsequent alarm deadlines.
 pub fn start_alarm0_irq() -> bool {
     ALARM0_COUNT.store(0, Ordering::Relaxed);
 
@@ -202,8 +219,9 @@ pub fn start_alarm0_irq() -> bool {
     let sleep_control = read32(SCB_SCR);
     write32(SCB_SCR, sleep_control & !SCB_SLEEPDEEP);
 
-    // Program the first one-shot alarm 1 ms into the future.
-    let first_deadline = read32(TIMER0_TIMELR).wrapping_add(ALARM_INTERVAL_US);
+    // Fire one startup-test alarm after approximately 1 ms.
+    // Later deadlines are programmed by the main thread.
+    let first_deadline = read32(TIMER0_TIMELR).wrapping_add(FIRST_ALARM_TEST_US);
 
     write32(TIMER0_ALARM0, first_deadline);
 
@@ -250,12 +268,7 @@ pub extern "C" fn timer0_irq0_handler() {
     // Clear the latched interrupt (write-one-to-clear).
     write32(TIMER0_INTR, ALARM0_BIT);
 
-    // Alarm 0 is one-shot. Rearm it from the current
-    // hardware time for approximately 1 ms later.
-    let next_deadline = read32(TIMER0_TIMELR).wrapping_add(ALARM_INTERVAL_US);
-
-    write32(TIMER0_ALARM0, next_deadline);
-
-    // Record a successful interrupt.
+    // Do not rearm here. The main scheduler chooses the
+    // next absolute deadline after processing ready work.
     ALARM0_COUNT.fetch_add(1, Ordering::Relaxed);
 }

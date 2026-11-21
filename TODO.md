@@ -434,13 +434,14 @@ Implementation notes:
   NVIC ISER0 = 0xE000E100
   Wake interval = approximately 1000 microseconds
 
-The alarm is one-shot and is rearmed by its ISR.
-The interrupt counter uses AtomicU32.
-The main loop processes UART commands after waking.
+Milestone 4B originally rearmed TIMER0 alarm0 in its ISR
+at approximately 1 ms intervals.
+
+Milestone 4C added independent UART0 RX interrupts.
+Milestone 4D replaces fixed timer ticks with deadlines.
 
 WFI provides ordinary CPU sleep, not deep sleep.
-UART reception is still polled after each timer wake.
-Interrupt-driven UART RX is a future milestone.
+The interrupt counter uses AtomicU32.
 
 ### Milestone 4C — Interrupt-driven UART RX
 
@@ -460,16 +461,20 @@ Interrupt-driven UART RX is a future milestone.
 - [x] Add rxstats console command.
 - [x] Add RX interrupt statistics to status.
 - [x] Add startup failure LED code 12.
-- [ ] Compile and flash firmware.
-- [ ] Confirm regular LED blinking.
-- [ ] Confirm ping, help, status and uptime.
-- [ ] Confirm rxstats interrupt count increases.
-- [ ] Confirm no dropped bytes during ordinary typing.
+- [x] Compile and flash firmware.
+- [ ] Explicitly verify LED blinking.
+- [x] Confirm ping, help, status and uptime.
+- [x] Confirm rxstats interrupt count increases.
+- [x] Confirm no dropped bytes during ordinary typing.
 - [ ] Test long input and line buffer overflow.
-- [ ] Confirm TIMER0 IRQ0 still runs.
+- [x] Confirm TIMER0 IRQ0 still runs.
 - [ ] Retest crash udf and serial fault reporting.
-- [ ] Restore normal firmware.
-- [ ] Commit and push Milestone 4C.
+- [ ] Restore normal firmware after fault testing.
+- [x] Commit and push Milestone 4C.
+
+Hardware confirmation: November 21, 2026.
+UART IRQ33 and TIMER0 IRQ0 operate simultaneously.
+RX statistics reported zero dropped bytes and zero errors.
 
 UART0 interrupt configuration:
   RP2350 UART0_IRQ = 33
@@ -490,9 +495,49 @@ Software RX buffer:
 The TIMER0 1 ms interrupt continues running.
 Dynamic event-driven timer scheduling is the next milestone.
 
+### Milestone 4D — Tickless Deadline Scheduling
+
+- [x] Remove periodic 1 ms ISR rearming.
+- [x] Keep the startup one-shot IRQ verification.
+- [x] Add main-thread absolute alarm programming.
+- [x] Preserve the UART0 IRQ33 RX ring buffer.
+- [x] Track LED and heartbeat deadlines separately.
+- [x] Select the earliest pending deadline.
+- [x] Mask interrupts during sleep preparation.
+- [x] Check RX queue and expired deadlines before WFI.
+- [x] Use PRIMASK-safe WFI wake-up handling.
+- [x] Re-enable interrupts after WFI.
+- [x] Update UART boot banner and IRQ diagnostics.
+- [ ] Build and flash on Pico 2.
+- [ ] Confirm LED continues blinking at 1 Hz.
+- [ ] Confirm heartbeats arrive around every 8 seconds.
+- [ ] Verify timer IRQ count is approximately 2/sec.
+- [ ] Confirm UART commands wake the CPU promptly.
+- [ ] Verify rxstats reports no ordinary input loss.
+- [ ] Test uptime and status.
+- [ ] Retest crash udf and fault reporting.
+- [ ] Restore normal firmware.
+- [ ] Commit and push Milestone 4D.
+
+The main thread owns TIMER0 alarm programming.
+The ISR acknowledges the alarm and updates its counter.
+TIMER0 alarm0 compares the lower 32 bits of the clock.
+
+Active scheduled tasks:
+  LED toggle: every 500 ms
+  UART heartbeat: every 8 seconds
+
+UART0 IRQ33 wakes the processor independently.
+No periodic 1 ms timer interrupt is required.
+
 ### Future Hardware Scheduling
 
 - [x] Implement UART RX interrupts and a ring buffer.
+- [x] Implement dynamic alarm scheduling for LED/heartbeat.
+- [ ] Implement a generic multi-task scheduler.
+- [ ] Add task cancellation and one-shot jobs.
+- [ ] Add interrupt priorities and latency statistics.
+- [ ] Measure actual sleep-mode power consumption.
 - [ ] Implement dynamically scheduled timer alarms.
 - [ ] Wake only when the next task is actually due.
 - [ ] Implement timer-driven software tasks.

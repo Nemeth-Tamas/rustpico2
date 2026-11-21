@@ -141,6 +141,9 @@ fn execute_command(command: &str, blink_cycles: u32) {
             uart::write_str("Elapsed timer time (ms): ");
             uart::write_u64_decimal(crate::timer::millis());
             uart::write_str("\r\n");
+
+            uart::write_str("Alarm mode: dynamic deadlines\r\n");
+            uart::write_str("Expected idle timer IRQ rate: ~2/sec\r\n");
         }
         "rxstats" => {
             uart::write_str("UART0 RX STATISTICS\r\n");

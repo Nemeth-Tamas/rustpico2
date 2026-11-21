@@ -526,8 +526,8 @@ pub extern "C" fn rust_main() -> ! {
         fault_signal(10, 0);
     }
 
-    // Install TIMER0 alarm 0 as a periodic interrupt source.
-    // Verify that a real interrupt is received before using WFI.
+    // Verify one real TIMER0 alarm interrupt at startup.
+    // The main loop will schedule subsequent deadlines.
     if !timer::start_alarm0_irq() {
         uart::write_str("ERROR: TIMER0 IRQ0 did not fire\r\n");
 
@@ -551,7 +551,7 @@ pub extern "C" fn rust_main() -> ! {
     uart::write_str("Runtime: custom no_std Rust\r\n");
     uart::write_str("Clock: XOSC 12 MHz -> CLK_PERI + CLK_REF\r\n");
     uart::write_str("Timer: TIMER0, 1 MHz hardware timebase\r\n");
-    uart::write_str("IRQ: TIMER0_ALARM0 every ~1 ms\r\n");
+    uart::write_str("IRQ: TIMER0_ALARM0 dynamic deadlines\r\n");
     uart::write_str("CPU idle: WFI enabled\r\n");
     uart::write_str("UART0: 115200 8N1\r\n");
     uart::write_str("UART0 TX: GPIO0\r\n");
@@ -585,8 +585,11 @@ pub extern "C" fn rust_main() -> ! {
     let mut blink_cycles = 0u32;
     let mut led_on = false;
 
-    let mut last_led_event = timer::micros();
-    let mut last_heartbeat = last_led_event;
+    let schedule_start = timer::micros();
+
+    // Absolute next-due timestamps in microseconds.
+    let mut next_led_event = schedule_start + LED_HALF_PERIOD_US;
+    let mut next_heartbeat = schedule_start + HEARTBEAT_PERIOD_US;
 
     loop {
         // Service serial commands without intentional delays.
@@ -594,9 +597,9 @@ pub extern "C" fn rust_main() -> ! {
 
         let now = timer::micros();
 
-        // Toggle the LED every 500 milliseconds.
-        if now.wrapping_sub(last_led_event) >= LED_HALF_PERIOD_US {
-            last_led_event = now;
+        // Toggle the LED when its next deadline arrives.
+        if now >= next_led_event {
+            next_led_event = now + LED_HALF_PERIOD_US;
             led_on = !led_on;
 
             if led_on {
@@ -614,18 +617,40 @@ pub extern "C" fn rust_main() -> ! {
             }
         }
 
-        // Emit a heartbeat approximately every 8 seconds.
-        if now.wrapping_sub(last_heartbeat) >= HEARTBEAT_PERIOD_US {
-            last_heartbeat = now;
+        // Emit a heartbeat when its deadline arrives.
+        if now >= next_heartbeat {
+            next_heartbeat = now + HEARTBEAT_PERIOD_US;
             shell.heartbeat();
         }
 
-        // Sleep until the next interrupt.
-        // TIMER0 alarm 0 wakes us approximately every 1 ms.
-        // The UART FIFO holds incoming characters until
-        // the next wake-up and console poll.
+        // Next scheduled event: LED or heartbeat.
+        let next_deadline = next_led_event.min(next_heartbeat);
+
+        // Prevent interrupt handlers from running between
+        // the work check and the decision to sleep.
         unsafe {
-            core::arch::asm!("wfi", options(nomem, nostack, preserves_flags));
+            core::arch::asm!("cpsid i", options(nostack, preserves_flags));
+        }
+
+        // Program TIMER0 alarm 0 for our next task.
+        timer::arm_alarm0(next_deadline);
+
+        // An UART interrupt may already have filled the
+        // RX ring, or the timer deadline may have passed
+        // while we were programming the alarm.
+        //
+        // If either is true, don't sleep.
+        if uart::rx_pending() == 0 && timer::micros() < next_deadline {
+            unsafe {
+                // Complete peripheral writes before sleeping.
+                // A pending IRQ wakes WFI despite PRIMASK.
+                core::arch::asm!("dsb", "wfi", options(nostack, preserves_flags));
+            }
+        }
+
+        // Permit pending UART0/TIMER0 handlers to execute.
+        unsafe {
+            core::arch::asm!("cpsie i", options(nostack, preserves_flags));
         }
     }
 }
