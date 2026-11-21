@@ -2,6 +2,7 @@
 //!
 //! ASCII commands, fixed 64-byte buffer, no allocator.
 
+use crate::scheduler::{FiredJob, MAX_JOBS, ScheduleError, Scheduler};
 use crate::uart;
 use core::ptr::read_volatile;
 
@@ -34,6 +35,25 @@ impl Console {
         self.blink_cycles = cycles;
     }
 
+    pub fn report_job(&self, event: FiredJob) {
+        uart::write_str("\r\n[TASK #");
+        uart::write_u64_decimal(u64::from(event.id));
+        uart::write_str("] PONG");
+
+        if event.repeating {
+            uart::write_str(" (repeating)");
+        }
+
+        uart::write_str("\r\n");
+        self.prompt();
+
+        // Restore partially typed ASCII input after the
+        // asynchronous-looking task notification.
+        if let Ok(text) = core::str::from_utf8(&self.line[..self.length]) {
+            uart::write_str(text);
+        }
+    }
+
     pub fn heartbeat(&self) {
         // Avoid interrupting someone in the middle of typing.
         if self.length == 0 && !self.overflow {
@@ -43,21 +63,21 @@ impl Console {
     }
 
     /// Drain all currently available UART RX characters.
-    pub fn poll(&mut self) {
+    pub fn poll(&mut self, jobs: &mut Scheduler) {
         while let Some(byte) = uart::read_byte() {
-            self.handle_byte(byte);
+            self.handle_byte(byte, jobs);
         }
     }
 
-    fn handle_byte(&mut self, byte: u8) {
+    fn handle_byte(&mut self, byte: u8, jobs: &mut Scheduler) {
         match byte {
             b'\r' => {
                 self.last_was_cr = true;
-                self.submit();
+                self.submit(jobs);
             }
             b'\n' => {
                 if !self.last_was_cr {
-                    self.submit();
+                    self.submit(jobs);
                 }
                 self.last_was_cr = false;
             }
@@ -98,7 +118,7 @@ impl Console {
         }
     }
 
-    fn submit(&mut self) {
+    fn submit(&mut self, jobs: &mut Scheduler) {
         uart::write_str("\r\n");
 
         if self.overflow {
@@ -106,7 +126,7 @@ impl Console {
         } else {
             let text = core::str::from_utf8(&self.line[..self.length]).unwrap_or("");
 
-            execute_command(text.trim_ascii(), self.blink_cycles);
+            execute_command(text.trim_ascii(), self.blink_cycles, jobs);
         }
 
         self.length = 0;
@@ -115,7 +135,7 @@ impl Console {
     }
 }
 
-fn execute_command(command: &str, blink_cycles: u32) {
+fn execute_command(command: &str, blink_cycles: u32, jobs: &mut Scheduler) {
     match command {
         "" => {}
         "help" => {
@@ -126,6 +146,10 @@ fn execute_command(command: &str, blink_cycles: u32) {
             uart::write_str("  uptime     Show hardware uptime\r\n");
             uart::write_str("  irq        Show TIMER0 interrupt count\r\n");
             uart::write_str("  rxstats    Show UART RX interrupt statistics\r\n");
+            uart::write_str("  tasks      List scheduled jobs\r\n");
+            uart::write_str("  after MS ping   Run one delayed job\r\n");
+            uart::write_str("  every MS ping   Run a repeating job\r\n");
+            uart::write_str("  cancel ID       Cancel a scheduled job\r\n");
             uart::write_str("  fault      Show SRAM crash record\r\n");
             uart::write_str("  echo TEXT  Echo text back\r\n");
             uart::write_str("  crash udf  Deliberate UsageFault!\r\n");
@@ -213,6 +237,9 @@ fn execute_command(command: &str, blink_cycles: u32) {
             uart::write_u64_decimal(u64::from(uart::rx_dropped()));
             uart::write_str("\r\n");
         }
+        "tasks" => {
+            print_tasks(jobs);
+        }
         "fault" => {
             print_fault_record();
         }
@@ -232,10 +259,100 @@ fn execute_command(command: &str, blink_cycles: u32) {
             if let Some(text) = command.strip_prefix("echo ") {
                 uart::write_str(text);
                 uart::write_str("\r\n");
-            } else {
+            } else if !handle_task_command(command, jobs) {
                 uart::write_str("Unknown command. Type help.\r\n");
             }
         }
+    }
+}
+
+fn print_tasks(jobs: &Scheduler) {
+    uart::write_str("SCHEDULED JOBS (capacity ");
+    uart::write_u64_decimal(MAX_JOBS as u64);
+    uart::write_str(")\r\n");
+
+    let mut count = 0u32;
+
+    for job in jobs.active() {
+        count += 1;
+
+        uart::write_str("  #");
+        uart::write_u64_decimal(u64::from(job.id));
+
+        uart::write_str("  ping  ");
+
+        if job.period_us == 0 {
+            uart::write_str("once");
+        } else {
+            uart::write_str("every ");
+            uart::write_u64_decimal(job.period_us / 1_000);
+            uart::write_str(" ms");
+        }
+
+        uart::write_str("  due in ");
+
+        let remaining_us = job.deadline_us.saturating_sub(crate::timer::micros());
+
+        uart::write_u64_decimal(remaining_us / 1_000);
+        uart::write_str(" ms\r\n");
+    }
+
+    if count == 0 {
+        uart::write_str("  No active jobs.\r\n");
+    }
+}
+
+fn handle_task_command(command: &str, jobs: &mut Scheduler) -> bool {
+    let mut parts = command.split_ascii_whitespace();
+    let operation = parts.next().unwrap_or("");
+
+    match operation {
+        "after" | "every" => {
+            let delay = parts.next().and_then(|value| value.parse::<u32>().ok());
+
+            let action = parts.next();
+
+            if delay.is_none() || action != Some("ping") || parts.next().is_some() {
+                uart::write_str("Usage: after MS ping | every MS ping\r\n");
+                return true;
+            }
+
+            let repeating = operation == "every";
+
+            match jobs.schedule(delay.unwrap_or(0), repeating, crate::timer::micros()) {
+                Ok(id) => {
+                    uart::write_str("Scheduled task #");
+                    uart::write_u64_decimal(u64::from(id));
+                    uart::write_str("\r\n");
+                }
+                Err(ScheduleError::InvalidDelay) => {
+                    uart::write_str("ERR: after 10..600000 ms; every 1000..600000 ms\r\n");
+                }
+                Err(ScheduleError::Full) => {
+                    uart::write_str("ERR: all 8 task slots are occupied\r\n");
+                }
+            }
+
+            true
+        }
+        "cancel" => {
+            let id = parts.next().and_then(|value| value.parse::<u32>().ok());
+
+            if let (Some(id), None) = (id, parts.next()) {
+                if jobs.cancel(id) {
+                    uart::write_str("Cancelled task #");
+                    uart::write_u64_decimal(u64::from(id));
+                    uart::write_str("\r\n");
+                } else {
+                    uart::write_str("ERR: task ID not found\r\n");
+                }
+            } else {
+                uart::write_str("Usage: cancel ID\r\n");
+            }
+
+            true
+        }
+        _ => false,
     }
 }
 

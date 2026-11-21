@@ -508,16 +508,21 @@ Dynamic event-driven timer scheduling is the next milestone.
 - [x] Use PRIMASK-safe WFI wake-up handling.
 - [x] Re-enable interrupts after WFI.
 - [x] Update UART boot banner and IRQ diagnostics.
-- [ ] Build and flash on Pico 2.
-- [ ] Confirm LED continues blinking at 1 Hz.
-- [ ] Confirm heartbeats arrive around every 8 seconds.
-- [ ] Verify timer IRQ count is approximately 2/sec.
-- [ ] Confirm UART commands wake the CPU promptly.
+- [x] Build and flash on Pico 2.
+- [ ] Measure LED timing under tickless operation.
+- [x] Confirm heartbeats still appear.
+- [x] Verify timer IRQ count is approximately 2/sec.
+- [x] Confirm UART commands wake the CPU promptly.
 - [ ] Verify rxstats reports no ordinary input loss.
-- [ ] Test uptime and status.
+- [x] Verify elapsed hardware time via irq command.
 - [ ] Retest crash udf and fault reporting.
-- [ ] Restore normal firmware.
-- [ ] Commit and push Milestone 4D.
+- [ ] Restore normal firmware after fault test.
+- [x] Commit and push Milestone 4D.
+
+Hardware confirmation: November 21, 2026.
+TIMER0 IRQ count advanced from 27 to 39 while elapsed time
+advanced from 13194 ms to 18601 ms.
+Tickless wake-up rate approximately 2.22 IRQ/sec.
 
 The main thread owns TIMER0 alarm programming.
 The ISR acknowledges the alarm and updates its counter.
@@ -530,9 +535,61 @@ Active scheduled tasks:
 UART0 IRQ33 wakes the processor independently.
 No periodic 1 ms timer interrupt is required.
 
+### Milestone 4E — Cooperative Job Scheduler
+
+- [x] Add separate src/scheduler.rs module.
+- [x] Define fixed-capacity task slots without allocation.
+- [x] Support eight independent user jobs.
+- [x] Assign unique task IDs.
+- [x] Support one-shot jobs.
+- [x] Support periodic jobs.
+- [x] Implement task cancellation.
+- [x] Implement earliest-deadline lookup.
+- [x] Skip missed periodic intervals.
+- [x] Execute jobs in the main thread, not in ISRs.
+- [x] Include user jobs in TIMER0 tickless scheduling.
+- [x] Add after MS ping command.
+- [x] Add every MS ping command.
+- [x] Add tasks command.
+- [x] Add cancel ID command.
+- [x] Redraw partially typed console input after job output.
+- [ ] Compile and flash firmware.
+- [ ] Verify one-shot execution.
+- [ ] Verify periodic execution.
+- [ ] Verify cancellation.
+- [ ] Verify all eight slots can be used.
+- [ ] Verify the ninth task is rejected.
+- [ ] Verify slots are reusable after cancellation.
+- [ ] Verify LED and heartbeat remain operational.
+- [ ] Verify UART IRQ and TIMER0 IRQ remain operational.
+- [ ] Verify normal tickless behavior with no user jobs.
+- [ ] Commit and push Milestone 4E.
+
+Job scheduler configuration:
+  Maximum user jobs: 8
+  One-shot delay: 10..600000 ms
+  Repeating period: 1000..600000 ms
+  Initial supported job action: ping
+
+The scheduler has no heap, no allocator and no dependencies.
+Only the main thread creates, removes and executes jobs.
+Interrupts continue to handle hardware events separately.
+
+Periodic jobs skip missed intervals rather than catching up.
+The existing LED and heartbeat remain independently scheduled.
+
 ### Future Hardware Scheduling
 
 - [x] Implement UART RX interrupts and a ring buffer.
+- [x] Implement dynamic alarm scheduling for LED/heartbeat.
+- [x] Implement initial fixed-capacity cooperative job scheduler.
+- [x] Implement job cancellation and one-shot jobs.
+- [ ] Add more job action types.
+- [ ] Move built-in LED and heartbeat into scheduler tasks.
+- [ ] Implement generic task callbacks.
+- [ ] Add task priority and execution time statistics.
+- [ ] Add interrupt priorities and latency statistics.
+- [ ] Measure actual sleep-mode power consumption.
 - [x] Implement dynamic alarm scheduling for LED/heartbeat.
 - [ ] Implement a generic multi-task scheduler.
 - [ ] Add task cancellation and one-shot jobs.

@@ -6,6 +6,7 @@ use core::panic::PanicInfo;
 use core::ptr::{read_volatile, write_volatile};
 
 mod console;
+mod scheduler;
 mod timer;
 mod uart;
 
@@ -553,6 +554,7 @@ pub extern "C" fn rust_main() -> ! {
     uart::write_str("Timer: TIMER0, 1 MHz hardware timebase\r\n");
     uart::write_str("IRQ: TIMER0_ALARM0 dynamic deadlines\r\n");
     uart::write_str("CPU idle: WFI enabled\r\n");
+    uart::write_str("Scheduler: 8 cooperative job slots\r\n");
     uart::write_str("UART0: 115200 8N1\r\n");
     uart::write_str("UART0 TX: GPIO0\r\n");
     uart::write_str("UART0 RX: GPIO1\r\n");
@@ -562,6 +564,8 @@ pub extern "C" fn rust_main() -> ! {
     uart::write_str("Status: BOOT OK\r\n\r\n");
 
     let mut shell = console::Console::new();
+    let mut scheduler = scheduler::Scheduler::new();
+
     uart::write_str("Interactive console ready. Type help.\r\n");
     shell.prompt();
 
@@ -592,10 +596,21 @@ pub extern "C" fn rust_main() -> ! {
     let mut next_heartbeat = schedule_start + HEARTBEAT_PERIOD_US;
 
     loop {
-        // Service serial commands without intentional delays.
-        shell.poll();
+        // Process incoming UART commands. The shell may
+        // create or cancel scheduled jobs.
+        shell.poll(&mut scheduler);
 
         let now = timer::micros();
+
+        // Execute due jobs cooperatively in thread mode.
+        // Interrupt handlers never execute user jobs.
+        for _ in 0..scheduler::MAX_JOBS {
+            let Some(event) = scheduler.take_due(now) else {
+                break;
+            };
+
+            shell.report_job(event);
+        }
 
         // Toggle the LED when its next deadline arrives.
         if now >= next_led_event {
@@ -623,8 +638,12 @@ pub extern "C" fn rust_main() -> ! {
             shell.heartbeat();
         }
 
-        // Next scheduled event: LED or heartbeat.
-        let next_deadline = next_led_event.min(next_heartbeat);
+        // Schedule the nearest LED, heartbeat or user job.
+        // With no user jobs, the original two deadlines
+        // determine exactly the same wake-up behavior.
+        let next_deadline = next_led_event
+            .min(next_heartbeat)
+            .min(scheduler.next_deadline().unwrap_or(u64::MAX));
 
         // Prevent interrupt handlers from running between
         // the work check and the decision to sleep.
